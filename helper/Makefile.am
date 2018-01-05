@@ -24,6 +24,7 @@ helperinclude_HEADERS = \
 		  include/odp/helper/odph_cuckootable.h\
 		  include/odp/helper/odph_hashtable.h\
 		  include/odp/helper/odph_iplookuptable.h\
+		  include/odp/helper/odph_iplookuptablev6.h\
 		  include/odp/helper/odph_lineartable.h\
 		  include/odp/helper/strong_types.h\
 		  include/odp/helper/tcp.h\
@@ -53,6 +54,7 @@ __LIB__libodphelper_la_SOURCES = \
 					lineartable.c \
 					cuckootable.c \
 					iplookuptable.c \
+					iplookuptablev6.c \
 					threads.c
 
 if helper_linux

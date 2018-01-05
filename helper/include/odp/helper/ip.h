@@ -12,6 +12,8 @@
 
 #ifndef ODPH_IP_H_
 #define ODPH_IP_H_
+typedef __int128 _uint128_t;
+typedef unsigned __int128 uint128_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -221,6 +223,16 @@ static inline int odph_ipv4_csum_update(odp_packet_t pkt)
 	(uint8_t)((((ver_tc_flow) & 0x0fc00000) >> 22) & 0xff)
 
 /**
+ * Ipv6 address
+ */
+typedef union ODP_PACKED {
+	uint8_t		u8[16];
+	odp_u16be_t	u16[8];
+	odp_u32be_t	u32[4];
+	odp_u64be_t	u64[2];
+} _odp_ipv6_addr_t;
+
+/**
  * IPv6 header
  */
 typedef struct ODP_PACKED {
@@ -279,6 +291,24 @@ typedef struct ODP_PACKED {
  * @retval <0 on failure
  */
 int odph_ipv4_addr_parse(uint32_t *ip_addr, const char *str);
+
+
+/**
+ * Parse IPv6 address from a string
+ *
+ * Parses IPv6 address from the string which must be passed in the format of
+ * eight decimal digits delimited by double dots (xxxxxx:xxxxxx:xxxxxx:xxxxxx:xxxxxx:xxxxxx:xxxxxx:xxxxxx). 
+ * All eight digits have to be present and may have leading zeros. String does not have to be
+ * NULL terminated. The address is written only when successful. The address
+ * byte order is CPU native.
+ *
+ * @param[out] ip_addr    Pointer to IPv6 address for output (in native endian)
+ * @param      str        IPv6 address string to be parsed
+ *
+ * @retval 0  on success
+ * @retval <0 on failure
+ */
+int odph_ipv6_addr_parse(_uint128_t *ip_addr, const char *str);
 
 /**
  * @}

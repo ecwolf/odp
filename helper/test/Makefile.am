@@ -26,7 +26,8 @@ EXECUTABLES = chksum \
               cuckootable \
               parse\
               table \
-              iplookuptable
+              iplookuptable \
+              iplookuptablev6
 
 #These are platform specific extensions that are not portable
 #They are a convenience to app writers who have chosen to
@@ -58,3 +59,4 @@ odpthreads_SOURCES = odpthreads.c
 parse_SOURCES = parse.c
 table_SOURCES = table.c
 iplookuptable_SOURCES = iplookuptable.c
+iplookuptablev6_SOURCES = iplookuptablev6.c
