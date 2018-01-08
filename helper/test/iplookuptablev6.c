@@ -52,14 +52,15 @@ static int test_ipv6_lookup_table(void)
 	int ret;
 	uint64_t value1 = 1, value2 = 2, result = 0;
 	_uint128_t lkp_ip = 0, lkp_ip2 = 0;
-
+	printf("Table create\n");
 	table = odph_iplookupv6_table_create(
-			"prefix_test", 0, 0, sizeof(uint32_t));
+			"prefix_test", 0, 0, sizeof(_uint128_t));
 	if (table == NULL) {
 		printf("IPv6 prefix lookup table creation failed\n");
 		return -1;
 	}
 
+	printf("Parse 1\n");
 	ret = odph_ipv6_addr_parse(&prefix1.ip, "2001:0db8:85a3:08d3:1319:8a2e:0370:7334");
 	if (ret < 0) {
 		printf("Failed to get IPv6 addr from str\n");
@@ -67,7 +68,7 @@ static int test_ipv6_lookup_table(void)
 		return -1;
 	}
 	prefix1.cidr = 64;
-
+	print_prefix_info_ipv6("Parse 1", prefix1.ip, prefix1.cidr);
 	/*ret = odph_ipv4_addr_parse(&prefix1.ip, "192.168.0.0");
 	if (ret < 0) {
 		printf("Failed to get IPv6 addr from str\n");
@@ -76,14 +77,15 @@ static int test_ipv6_lookup_table(void)
 	}
 	prefix1.cidr = 11;*/
 
+	printf("Parse 2\n");
 	ret = odph_ipv6_addr_parse(&prefix2.ip, "2001:0db8:ffff:08d3:1319:8a2e:0370:7335");
 	if (ret < 0) {
 		printf("Failed to get IPv6 addr from str\n");
 		odph_iplookupv6_table_destroy(table);
 		return -1;
 	}
-	prefix2.cidr = 64;
-
+	prefix2.cidr = 24;
+	print_prefix_info_ipv6("Parse 1", prefix1.ip, prefix1.cidr);
 	/*ret = odph_ipv4_addr_parse(&prefix2.ip, "192.168.0.0");
 	if (ret < 0) {
 		printf("Failed to get IP addr from str\n");
@@ -92,13 +94,16 @@ static int test_ipv6_lookup_table(void)
 	}
 	prefix2.cidr = 24;*/
 
+	printf("Parse 3\n");
 	ret = odph_ipv6_addr_parse(&lkp_ip, "2001:0db8:85a3:08d3:1319:8a2e:0370:7334");
 	if (ret < 0) {
 		printf("Failed to get IPv6 addr from str\n");
 		odph_iplookupv6_table_destroy(table);
 		return -1;
 	}
+	print_prefix_info_ipv6("Parse lkp",lkp_ip ,128);
 
+	printf("Parse 4\n");
 	ret = odph_ipv6_addr_parse(&lkp_ip2, "2001:0db8:ffff:08d3:1319:8a2e:0370:7335");
 	if (ret < 0) {
 		printf("Failed to get IPv6 addr from str\n");
@@ -114,6 +119,7 @@ static int test_ipv6_lookup_table(void)
 	}*/
 
 	/* test with standard put/get/remove functions */
+	printf("TABLE PUT\n");
 	ret = odph_iplookupv6_table_put_value(table, &prefix1, &value1);
 	printf("Add IP prefix: 2001:0db8:85a3:08d3:1319:8a2e:0370:7334  ----\n");
 	print_prefix_info_ipv6("Add", prefix1.ip, prefix1.cidr);
@@ -130,7 +136,7 @@ static int test_ipv6_lookup_table(void)
 		odph_iplookup_table_destroy(table);
 		return -1;
 	}*/
-
+	printf("TABLE GET\n");
 	ret = odph_iplookupv6_table_get_value(table, &lkp_ip, &result, 0);
 	print_prefix_info_ipv6("Lkp", lkp_ip, 128);
 	if (ret < 0 || result != 1) {
