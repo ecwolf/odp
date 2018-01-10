@@ -741,8 +741,8 @@ odph_iplookupv6_table_put_value(odph_table_t tbl, void *key, void *value)
 
 	printf("GET L1\n");
 	/* get L1 entry */
-	l1e = &impl->l1e[prefix->ip >> 16];
-	odp_buffer_t *buff = ENTRY_BUFF_ARR(impl->l1e) + (prefix->ip >> 16);
+	l1e = &impl->l1e[prefix->ip >> 112]; //check value ****16
+	odp_buffer_t *buff = ENTRY_BUFF_ARR(impl->l1e) + (prefix->ip >> 112); //check value ****16
 
 	printf("prefix_insert %d\n", prefix->cidr);
 	//TODO manage 128
@@ -754,7 +754,7 @@ odph_iplookupv6_table_put_value(odph_table_t tbl, void *key, void *value)
 		printf("prefix_insert_iter\n");
 		ret = prefix_insert_iter(
 				impl, l1e, buff,
-				((prefix->ip) << 16), prefix->cidr - 16,
+				((prefix->ip) << 112), prefix->cidr - 16, //check value ****16
 				nexthop, 24, 2);
 	}
 	print_prefix_info_ipv6("table_put_value END", prefix->ip, prefix->cidr);
@@ -775,14 +775,14 @@ int odph_iplookupv6_table_get_value(odph_table_t tbl, void *key,
 		return -EINVAL;
 	printf("PASS NULL\n");
 	ip = *((_uint128_t *)key);
-	entry = &impl->l1e[ip >> 16];
+	entry = &impl->l1e[ip >> 112]; //check value ****16
 	printf("GET L1\n");
 	if (entry == NULL) {
 		ODPH_DBG("failed to get L1 entry.\n");
 		return -1;
 	}
 	printf("Searching\n");
-	ip <<= 16;
+	ip <<= 112; //check value ****16
 	printf("bwhile,%d\n", entry->child);
 	while (entry->child) {
 		printf("1\n");
@@ -812,6 +812,7 @@ prefix_delete_lx(
 		odp_buffer_t *buff, uint8_t cidr, uint8_t over_cidr,
 		odp_buffer_t over_nexthop, uint8_t level)
 {
+	printf("prefix_delete_lx\n");
 	uint8_t ret, flag = 1;
 	prefix_entry_t *e = l1e;
 	odp_buffer_t *b = buff;
@@ -873,6 +874,7 @@ prefix_delete_lx(
 static uint8_t
 can_recycle(prefix_entry_t *e, uint32_t level)
 {
+	printf("can_recycle\n");
 	uint8_t recycle = 1;
 	int i = 1;
 	prefix_entry_t *ne = (prefix_entry_t *)e->ptr;
@@ -901,9 +903,10 @@ can_recycle(prefix_entry_t *e, uint32_t level)
 static uint8_t
 prefix_delete_iter(
 		odph_iplookup_table_impl *tbl, prefix_entry_t *e,
-		odp_buffer_t *buff, uint32_t ip, uint8_t cidr,
+		odp_buffer_t *buff, _uint128_t ip, uint8_t cidr,
 		uint8_t level, uint8_t depth)
 {
+	printf("prefix_delete_iter\n");
 	uint8_t ret = 0, over_cidr;
 	odp_buffer_t over_nexthop;
 
@@ -914,9 +917,9 @@ prefix_delete_iter(
 		prefix_entry_t *ne =
 			(prefix_entry_t *)e->ptr;
 		odp_buffer_t *nbuff = ENTRY_BUFF_ARR(ne);
-
-		ne += ((uint32_t)(ip << level) >> 24);
-		nbuff += ((uint32_t)(ip << level) >> 24);
+ 
+		ne += ((_uint128_t)(ip << level) >> 24); //check value ****24
+		nbuff += ((_uint128_t)(ip << level) >> 24); //check value ****24
 		ret = prefix_delete_iter(
 				tbl, ne, nbuff, ip, cidr - 8,
 				level + 8, depth + 1);
@@ -946,6 +949,7 @@ prefix_delete_iter(
 int
 odph_iplookupv6_table_remove_value(odph_table_t tbl, void *key)
 {
+	printf("Start Remove\n");
 	odph_iplookup_table_impl *impl = (void *)tbl;
 	odph_iplookupv6_prefix_t *prefix = (odph_iplookupv6_prefix_t *)key;
 	_uint128_t ip;
@@ -960,8 +964,8 @@ odph_iplookupv6_table_remove_value(odph_table_t tbl, void *key)
 	if (cidr == 0)
 		return -EINVAL;
 
-	prefix_entry_t *entry = &impl->l1e[ip >> 16];
-	odp_buffer_t *buff = ENTRY_BUFF_ARR(impl->l1e) + (ip >> 16);
+	prefix_entry_t *entry = &impl->l1e[ip >> 112]; //check value ****16
+	odp_buffer_t *buff = ENTRY_BUFF_ARR(impl->l1e) + (ip >> 112); //check value ****16
 	uint8_t over_cidr, ret;
 	odp_buffer_t over_nexthop;
 
@@ -975,8 +979,8 @@ odph_iplookupv6_table_remove_value(odph_table_t tbl, void *key)
 		prefix_entry_t *ne = (prefix_entry_t *)entry->ptr;
 		odp_buffer_t *nbuff = ENTRY_BUFF_ARR(ne);
 
-		ne += ((uint32_t)(ip << 16) >> 24);
-		nbuff += ((uint32_t)(ip << 16) >> 24);
+		ne += ((_uint128_t)(ip << 112) >> 24); //check value ****16
+		nbuff += ((_uint128_t)(ip << 112) >> 24); //check value ****16
 		ret = prefix_delete_iter(impl, ne, nbuff, ip, cidr - 16, 24, 2);
 
 		if (ret && can_recycle(entry, 16)) {
