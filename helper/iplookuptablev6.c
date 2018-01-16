@@ -22,7 +22,7 @@ typedef unsigned __int128 uint128_t;
 
 //***
 
-static void print_prefix_info_ipv6(
+/*static void print_prefix_info_ipv6(
 		const char *msg, _uint128_t ip, uint8_t cidr)
 {
 	int i = 0;
@@ -35,7 +35,7 @@ static void print_prefix_info_ipv6(
 		printf("%02x", ptr[i]);
 	}
 	printf("/%d\n", cidr);
-}
+}*/
 
 //**
 
@@ -642,19 +642,19 @@ prefix_insert_iter(
 		odp_buffer_t *buff, _uint128_t ip, uint8_t cidr,
 		odp_buffer_t nexthop, uint8_t level, uint8_t depth)
 {
-	printf("Start iter\n");
+	//printf("Start iter\n");
 	uint8_t state = 0;
 	prefix_entry_t *ne = NULL;
 	odp_buffer_t *nbuff = NULL;
  	
-	printf("child existed? %d\n", entry->child);
+	//printf("child existed? %d\n", entry->child);
 	/* If child subtree is existed, get it. */
 	if (entry->child) {
-		printf("child existed, get it. \n");
+		//printf("child existed, get it. \n");
 		ne = (prefix_entry_t *)entry->ptr;
 		nbuff = ENTRY_BUFF_ARR(ne);
 	} else {
-		printf("child subtree is not existed,  create a new subtree. \n");
+		//printf("child subtree is not existed,  create a new subtree. \n");
 		/* If the child is not existed, create a new subtree. */
 		odp_buffer_t buf, push = entry->nexthop;
 
@@ -669,24 +669,24 @@ prefix_insert_iter(
 		entry->child = 1;
 		entry->ptr = ne;
 		*buff = buf;
-		printf("child  %d\n", entry->child);
+		//printf("child  %d\n", entry->child);
 		/* If this entry contains a nexthop and a small cidr,
 		 * push it to the next level.
 		 */
 		if (entry->cidr > 0)
 			(void)prefix_insert_into_lx(tbl, ne, entry->cidr,
 						    push, entry->cidr + 8);
-		printf("child  %d\n", entry->child);
+		//printf("child  %d\n", entry->child);
 	}
 	//TODO update the ip >> to manage 128 bits
 	ne += (ip >> 120); //24
 	nbuff += (ip >> 120); //24
 	if (cidr <= 8) {
-		printf("prefix_insert_into_lx 2 entry->child %d cidr <= 8 %d\n", entry->child, cidr <= 8);
+		//printf("prefix_insert_into_lx 2 entry->child %d cidr <= 8 %d\n", entry->child, cidr <= 8);
 		state = prefix_insert_into_lx(
 				tbl, ne, cidr + depth * 8, nexthop, level);
 	} else {
-		printf("prefix_insert_iter 2 entry->child %d cidr - 8 %d\n level + 8 %d cidr <= 8 %d\n", entry->child, cidr - 8, level + 8, cidr <= 8);
+		//printf("prefix_insert_iter 2 entry->child %d cidr - 8 %d\n level + 8 %d cidr <= 8 %d\n", entry->child, cidr - 8, level + 8, cidr <= 8);
 		state = prefix_insert_iter(
 				tbl, ne, nbuff, ip << 8, cidr - 8,
 				nexthop, level + 8, depth + 1);
@@ -698,10 +698,10 @@ prefix_insert_iter(
 int
 odph_iplookupv6_table_put_value(odph_table_t tbl, void *key, void *value)
 {
-	printf("Start PUT\n");
+	//printf("Start PUT\n");
 	odph_iplookup_table_impl *impl = (void *)tbl;
 	odph_iplookupv6_prefix_t *prefix = (odph_iplookupv6_prefix_t *)key;
-	print_prefix_info_ipv6("table_put_value START", prefix->ip, prefix->cidr);
+	//print_prefix_info_ipv6("table_put_value START", prefix->ip, prefix->cidr);
 	prefix_entry_t *l1e = NULL;
 	odp_buffer_t nexthop;
 	int ret = 0;
@@ -709,27 +709,27 @@ odph_iplookupv6_table_put_value(odph_table_t tbl, void *key, void *value)
 
 	if ((tbl == NULL) || (key == NULL) || (value == NULL))
 		return -1;
- 	printf("PASS NULL\n");
+ 	//printf("PASS NULL\n");
 	nexthop = *((odp_buffer_t *)value);
 
 	if (prefix->cidr == 0)
 		return -1;
-	print_prefix_info_ipv6("prefix->ip START", prefix->ip, prefix->cidr);
+	//print_prefix_info_ipv6("prefix->ip START", prefix->ip, prefix->cidr);
 
 	ret = odph_ipv6_addr_parse(&lkp_ip, "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff");
 	if (ret < 0) {
 		printf("Failed to get IPv6 addr from str\n");
 		return -1;
 	}
-	print_prefix_info_ipv6("lkp_ip ffff",lkp_ip, 128);
+	//print_prefix_info_ipv6("lkp_ip ffff",lkp_ip, 128);
 
 
 	prefix->ip = prefix->ip & (lkp_ip << (IP_LENGTH - prefix->cidr));
-	print_prefix_info_ipv6("prefix->ip END", prefix->ip, prefix->cidr);
+	//print_prefix_info_ipv6("prefix->ip END", prefix->ip, prefix->cidr);
 
-	printf("PASS cidr !=o\n");
+	//printf("PASS cidr !=o\n");
 	/* insert into trie */
-	printf("insert into trie \n");
+	//printf("insert into trie \n");
 	ret = trie_insert_node(
 				impl, impl->trie,
 				prefix->ip, prefix->cidr, nexthop);
@@ -739,25 +739,25 @@ odph_iplookupv6_table_put_value(odph_table_t tbl, void *key, void *value)
 		return -1;
 	}
 
-	printf("GET L1\n");
+	//printf("GET L1\n");
 	/* get L1 entry */
 	l1e = &impl->l1e[prefix->ip >> 112]; //check value ****16
 	odp_buffer_t *buff = ENTRY_BUFF_ARR(impl->l1e) + (prefix->ip >> 112); //check value ****16
 
-	printf("prefix_insert %d\n", prefix->cidr);
+	//printf("prefix_insert %d\n", prefix->cidr);
 	//TODO manage 128
 	if (prefix->cidr <= 16) {
-		printf("prefix_insert_into_lx\n");
+		//printf("prefix_insert_into_lx\n");
 		ret = prefix_insert_into_lx(
 				impl, l1e, prefix->cidr, nexthop, 16);
 	} else {
-		printf("prefix_insert_iter\n");
+		//printf("prefix_insert_iter\n");
 		ret = prefix_insert_iter(
 				impl, l1e, buff,
 				((prefix->ip) << 112), prefix->cidr - 16, //check value ****16
 				nexthop, 24, 2);
 	}
-	print_prefix_info_ipv6("table_put_value END", prefix->ip, prefix->cidr);
+	//print_prefix_info_ipv6("table_put_value END", prefix->ip, prefix->cidr);
 	return ret;
 }
 
@@ -765,7 +765,7 @@ int odph_iplookupv6_table_get_value(odph_table_t tbl, void *key,
 				  void *buffer ODP_UNUSED,
 				  uint32_t buffer_size ODP_UNUSED)
 {
-	printf("Start GET\n");
+	//printf("Start GET\n");
 	odph_iplookup_table_impl *impl = (void *)tbl;
 	_uint128_t ip;
 	prefix_entry_t *entry;
@@ -773,27 +773,27 @@ int odph_iplookupv6_table_get_value(odph_table_t tbl, void *key,
 
 	if ((tbl == NULL) || (key == NULL) || (buffer == NULL))
 		return -EINVAL;
-	printf("PASS NULL\n");
+	//printf("PASS NULL\n");
 	ip = *((_uint128_t *)key);
 	entry = &impl->l1e[ip >> 112]; //check value ****16
-	printf("GET L1\n");
+	//printf("GET L1\n");
 	if (entry == NULL) {
 		ODPH_DBG("failed to get L1 entry.\n");
 		return -1;
 	}
-	printf("Searching\n");
+	//printf("Searching\n");
 	ip <<= 112; //check value ****16
-	printf("bwhile,%d\n", entry->child);
+	//printf("bwhile,%d\n", entry->child);
 	while (entry->child) {
-		printf("1\n");
+		//printf("1\n");
 		entry = (prefix_entry_t *)entry->ptr;
-		printf("2\n");
+		//printf("2\n");
 		entry += ip >> 24;
-		printf("3\n");
+		//printf("3\n");
 		ip <<= 8;
-		printf("IN\n");
+		//printf("IN\n");
 	}
-	printf("Copy DATA\n");
+	//printf("Copy DATA\n");
 	/* copy data */
 	if (entry->nexthop == ODP_BUFFER_INVALID) {
 		/* ONLY match the default prefix */
@@ -812,7 +812,7 @@ prefix_delete_lx(
 		odp_buffer_t *buff, uint8_t cidr, uint8_t over_cidr,
 		odp_buffer_t over_nexthop, uint8_t level)
 {
-	printf("prefix_delete_lx\n");
+	//printf("prefix_delete_lx\n");
 	uint8_t ret, flag = 1;
 	prefix_entry_t *e = l1e;
 	odp_buffer_t *b = buff;
@@ -874,7 +874,7 @@ prefix_delete_lx(
 static uint8_t
 can_recycle(prefix_entry_t *e, uint32_t level)
 {
-	printf("can_recycle\n");
+	//printf("can_recycle\n");
 	uint8_t recycle = 1;
 	int i = 1;
 	prefix_entry_t *ne = (prefix_entry_t *)e->ptr;
@@ -906,7 +906,7 @@ prefix_delete_iter(
 		odp_buffer_t *buff, _uint128_t ip, uint8_t cidr,
 		uint8_t level, uint8_t depth)
 {
-	printf("prefix_delete_iter\n");
+	//printf("prefix_delete_iter\n");
 	uint8_t ret = 0, over_cidr;
 	odp_buffer_t over_nexthop;
 
@@ -949,7 +949,7 @@ prefix_delete_iter(
 int
 odph_iplookupv6_table_remove_value(odph_table_t tbl, void *key)
 {
-	printf("Start Remove\n");
+	//printf("Start Remove\n");
 	odph_iplookup_table_impl *impl = (void *)tbl;
 	odph_iplookupv6_prefix_t *prefix = (odph_iplookupv6_prefix_t *)key;
 	_uint128_t ip;
