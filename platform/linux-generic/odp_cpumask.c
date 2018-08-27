@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, Linaro Limited
+/* Copyright (c) 2013-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -14,6 +14,8 @@
 #include <odp/api/cpumask.h>
 #include <odp/api/init.h>
 #include <odp_debug_internal.h>
+#include <odp_global_data.h>
+#include <odp_init_internal.h>
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, Linaro Limited
+/* Copyright (c) 2015-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:	BSD-3-Clause
@@ -30,7 +30,7 @@
  */
 #define POOL_NUM_PKT  64
 
-static uint8_t test_iv[8] = "01234567";
+static uint8_t test_iv[16] = "0123456789abcdef";
 
 static uint8_t test_key16[16] = { 0x01, 0x02, 0x03, 0x04, 0x05,
 				  0x06, 0x07, 0x08, 0x09, 0x0a,
@@ -38,11 +38,41 @@ static uint8_t test_key16[16] = { 0x01, 0x02, 0x03, 0x04, 0x05,
 				  0x10,
 };
 
+static uint8_t test_key20[20] = { 0x01, 0x02, 0x03, 0x04, 0x05,
+				  0x06, 0x07, 0x08, 0x09, 0x0a,
+				  0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+				  0x10, 0x11, 0x12, 0x13, 0x14,
+};
+
 static uint8_t test_key24[24] = { 0x01, 0x02, 0x03, 0x04, 0x05,
 				  0x06, 0x07, 0x08, 0x09, 0x0a,
 				  0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
 				  0x10, 0x11, 0x12, 0x13, 0x14,
 				  0x15, 0x16, 0x17, 0x18
+};
+
+static uint8_t test_key32[32] = { 0x01, 0x02, 0x03, 0x04, 0x05,
+				  0x06, 0x07, 0x08, 0x09, 0x0a,
+				  0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+				  0x10, 0x11, 0x12, 0x13, 0x14,
+				  0x15, 0x16, 0x17, 0x18, 0x19,
+				  0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
+				  0x1f, 0x20,
+};
+
+static uint8_t test_key64[64] = { 0x01, 0x02, 0x03, 0x04, 0x05,
+				  0x06, 0x07, 0x08, 0x09, 0x0a,
+				  0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+				  0x10, 0x11, 0x12, 0x13, 0x14,
+				  0x15, 0x16, 0x17, 0x18, 0x19,
+				  0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
+				  0x1f, 0x20, 0x21, 0x22, 0x23,
+				  0x24, 0x25, 0x26, 0x27, 0x28,
+				  0x29, 0x2a, 0x4b, 0x2c, 0x2d,
+				  0x2e, 0x2f, 0x30, 0x31, 0x32,
+				  0x33, 0x34, 0x55, 0x36, 0x37,
+				  0x38, 0x39, 0x5a, 0x3b, 0x3c,
+				  0x3d, 0x3e, 0x5f, 0x40,
 };
 
 /**
@@ -157,6 +187,14 @@ typedef struct {
 	struct rusage ru_thread; /**< Rusage value for current thread */
 } time_record_t;
 
+/* Arguments for one test run */
+typedef struct test_run_arg_t {
+	crypto_args_t crypto_args;
+	crypto_alg_config_t *crypto_alg_config;
+	odp_crypto_capability_t crypto_capa;
+
+} test_run_arg_t;
+
 static void parse_args(int argc, char *argv[], crypto_args_t *cargs);
 static void usage(char *progname);
 
@@ -187,7 +225,7 @@ static crypto_alg_config_t algs_config[] = {
 				.data = test_key24,
 				.length = sizeof(test_key24)
 			},
-			.iv = {
+			.cipher_iv = {
 				.data = test_iv,
 				.length = 8,
 			},
@@ -202,7 +240,7 @@ static crypto_alg_config_t algs_config[] = {
 				.data = test_key24,
 				.length = sizeof(test_key24)
 			},
-			.iv = {
+			.cipher_iv = {
 				.data = test_iv,
 				.length = 8,
 			},
@@ -224,6 +262,176 @@ static crypto_alg_config_t algs_config[] = {
 				.length = sizeof(test_key16)
 			},
 			.auth_digest_len = 12,
+		},
+	},
+	{
+		.name = "aes-cbc-null",
+		.session = {
+			.cipher_alg = ODP_CIPHER_ALG_AES_CBC,
+			.cipher_key = {
+				.data = test_key16,
+				.length = sizeof(test_key16)
+			},
+			.cipher_iv = {
+				.data = test_iv,
+				.length = 16,
+			},
+			.auth_alg = ODP_AUTH_ALG_NULL
+		},
+	},
+	{
+		.name = "aes-cbc-hmac-sha1-96",
+		.session = {
+			.cipher_alg = ODP_CIPHER_ALG_AES_CBC,
+			.cipher_key = {
+				.data = test_key16,
+				.length = sizeof(test_key16)
+			},
+			.cipher_iv = {
+				.data = test_iv,
+				.length = 16,
+			},
+			.auth_alg = ODP_AUTH_ALG_SHA1_HMAC,
+			.auth_key = {
+				.data = test_key20,
+				.length = sizeof(test_key20)
+			},
+			.auth_digest_len = 12,
+		},
+	},
+	{
+		.name = "null-hmac-sha1-96",
+		.session = {
+			.cipher_alg = ODP_CIPHER_ALG_NULL,
+			.auth_alg = ODP_AUTH_ALG_SHA1_HMAC,
+			.auth_key = {
+				.data = test_key20,
+				.length = sizeof(test_key20)
+			},
+			.auth_digest_len = 12,
+		},
+	},
+	{
+		.name = "aes-ctr-null",
+		.session = {
+			.cipher_alg = ODP_CIPHER_ALG_AES_CTR,
+			.cipher_key = {
+				.data = test_key16,
+				.length = sizeof(test_key16)
+			},
+			.cipher_iv = {
+				.data = test_iv,
+				.length = 16,
+			},
+			.auth_alg = ODP_AUTH_ALG_NULL
+		},
+	},
+	{
+		.name = "aes-ctr-hmac-sha1-96",
+		.session = {
+			.cipher_alg = ODP_CIPHER_ALG_AES_CTR,
+			.cipher_key = {
+				.data = test_key16,
+				.length = sizeof(test_key16)
+			},
+			.cipher_iv = {
+				.data = test_iv,
+				.length = 16,
+			},
+			.auth_alg = ODP_AUTH_ALG_SHA1_HMAC,
+			.auth_key = {
+				.data = test_key20,
+				.length = sizeof(test_key20)
+			},
+			.auth_digest_len = 12,
+		},
+	},
+	{
+		.name = "null-hmac-sha256-128",
+		.session = {
+			.cipher_alg = ODP_CIPHER_ALG_NULL,
+			.auth_alg = ODP_AUTH_ALG_SHA256_HMAC,
+			.auth_key = {
+				.data = test_key32,
+				.length = sizeof(test_key32)
+			},
+			.auth_digest_len = 16,
+		},
+	},
+	{
+		.name = "null-hmac-sha512-256",
+		.session = {
+			.cipher_alg = ODP_CIPHER_ALG_NULL,
+			.auth_alg = ODP_AUTH_ALG_SHA512_HMAC,
+			.auth_key = {
+				.data = test_key64,
+				.length = sizeof(test_key64)
+			},
+			.auth_digest_len = 32,
+		},
+	},
+	{
+		.name = "null-aes-gmac",
+		.session = {
+			.cipher_alg = ODP_CIPHER_ALG_NULL,
+			.auth_alg = ODP_AUTH_ALG_AES_GMAC,
+			.auth_key = {
+				.data = test_key16,
+				.length = sizeof(test_key16)
+			},
+			.auth_iv = {
+				.data = test_iv,
+				.length = 12,
+			},
+			.auth_digest_len = 16,
+		},
+	},
+	{
+		.name = "aes-gcm",
+		.session = {
+			.cipher_alg = ODP_CIPHER_ALG_AES_GCM,
+			.cipher_key = {
+				.data = test_key16,
+				.length = sizeof(test_key16)
+			},
+			.cipher_iv = {
+				.data = test_iv,
+				.length = 12,
+			},
+			.auth_alg = ODP_AUTH_ALG_AES_GCM,
+			.auth_digest_len = 16,
+		},
+	},
+	{
+		.name = "aes-ccm",
+		.session = {
+			.cipher_alg = ODP_CIPHER_ALG_AES_CCM,
+			.cipher_key = {
+				.data = test_key16,
+				.length = sizeof(test_key16)
+			},
+			.cipher_iv = {
+				.data = test_iv,
+				.length = 11,
+			},
+			.auth_alg = ODP_AUTH_ALG_AES_CCM,
+			.auth_digest_len = 16,
+		},
+	},
+	{
+		.name = "chacha20-poly1305",
+		.session = {
+			.cipher_alg = ODP_CIPHER_ALG_CHACHA20_POLY1305,
+			.cipher_key = {
+				.data = test_key32,
+				.length = sizeof(test_key32)
+			},
+			.cipher_iv = {
+				.data = test_iv,
+				.length = 12,
+			},
+			.auth_alg = ODP_AUTH_ALG_CHACHA20_POLY1305,
+			.auth_digest_len = 16,
 		},
 	},
 };
@@ -446,9 +654,10 @@ create_session_from_config(odp_crypto_session_t *session,
 			return -1;
 		}
 		params.compl_queue = out_queue;
-
+		params.op_mode = ODP_CRYPTO_ASYNC;
 	} else {
 		params.compl_queue = ODP_QUEUE_INVALID;
+		params.op_mode = ODP_CRYPTO_SYNC;
 	}
 	if (odp_crypto_session_create(&params, session,
 				      &ses_create_rc)) {
@@ -457,6 +666,24 @@ create_session_from_config(odp_crypto_session_t *session,
 	}
 
 	return 0;
+}
+
+static odp_packet_t
+make_packet(odp_pool_t pkt_pool, unsigned int payload_length)
+{
+	odp_packet_t pkt;
+
+	pkt = odp_packet_alloc(pkt_pool, payload_length);
+	if (pkt == ODP_PACKET_INVALID) {
+		app_err("failed to allocate buffer\n");
+		return pkt;
+	}
+
+	void *mem = odp_packet_data(pkt);
+
+	memset(mem, 1, payload_length);
+
+	return pkt;
 }
 
 /**
@@ -470,14 +697,12 @@ run_measure_one(crypto_args_t *cargs,
 		unsigned int payload_length,
 		crypto_run_result_t *result)
 {
-	odp_crypto_op_param_t params;
+	odp_crypto_packet_op_param_t params;
 
 	odp_pool_t pkt_pool;
 	odp_queue_t out_queue;
-	odp_packet_t pkt;
+	odp_packet_t pkt = ODP_PACKET_INVALID;
 	int rc = 0;
-
-	odp_bool_t posted = 0;
 
 	pkt_pool = odp_pool_lookup("packet_pool");
 	if (pkt_pool == ODP_POOL_INVALID) {
@@ -493,15 +718,11 @@ run_measure_one(crypto_args_t *cargs,
 		}
 	}
 
-	pkt = odp_packet_alloc(pkt_pool, payload_length);
-	if (pkt == ODP_PACKET_INVALID) {
-		app_err("failed to allocate buffer\n");
-		return -1;
+	if (cargs->reuse_packet) {
+		pkt = make_packet(pkt_pool, payload_length);
+		if (ODP_PACKET_INVALID == pkt)
+			return -1;
 	}
-
-	void *mem = odp_packet_data(pkt);
-
-	memset(mem, 1, payload_length);
 
 	time_record_t start, end;
 	int packets_sent = 0;
@@ -518,81 +739,73 @@ run_measure_one(crypto_args_t *cargs,
 	params.auth_range.length = payload_length;
 	params.hash_result_offset = payload_length;
 
-	if (cargs->reuse_packet) {
-		params.pkt = pkt;
-		params.out_pkt = cargs->in_place ? pkt :
-				 ODP_PACKET_INVALID;
-	}
-
 	fill_time_record(&start);
 
 	while ((packets_sent < cargs->iteration_count) ||
 	       (packets_received <  cargs->iteration_count)) {
 		void *mem;
-		odp_crypto_op_result_t result;
 
 		if ((packets_sent < cargs->iteration_count) &&
 		    (packets_sent - packets_received <
 		     cargs->in_flight)) {
-			if (!cargs->reuse_packet) {
-				/*
-				 * For in place test we use just one
-				 * statically allocated buffer.
-				 * For now in place test we have to
-				 * allocate and initialize packet
-				 * every time.
-				 * Note we leaked one packet here.
-				 */
-				odp_packet_t newpkt;
+			odp_packet_t out_pkt;
 
-				newpkt = odp_packet_alloc(pkt_pool,
-							  payload_length);
-				if (newpkt == ODP_PACKET_INVALID) {
-					app_err("failed to allocate buffer\n");
+			if (!cargs->reuse_packet) {
+				pkt = make_packet(pkt_pool, payload_length);
+				if (ODP_PACKET_INVALID == pkt)
 					return -1;
-				}
-				mem = odp_packet_data(newpkt);
-				memset(mem, 1, payload_length);
-				params.pkt = newpkt;
-				params.out_pkt = cargs->in_place ? newpkt :
-						 ODP_PACKET_INVALID;
 			}
 
+			out_pkt = cargs->in_place ? pkt : ODP_PACKET_INVALID;
+
 			if (cargs->debug_packets) {
-				mem = odp_packet_data(params.pkt);
+				mem = odp_packet_data(pkt);
 				print_mem("Packet before encryption:",
 					  mem, payload_length);
 			}
 
-			rc = odp_crypto_operation(&params, &posted,
-						  &result);
-			if (rc)
-				app_err("failed odp_crypto_operation: rc = %d\n",
-					rc);
-			else
-				packets_sent++;
+			if (cargs->schedule || cargs->poll) {
+				rc = odp_crypto_op_enq(&pkt, &out_pkt,
+						       &params, 1);
+				if (rc <= 0) {
+					app_err("failed odp_crypto_packet_op_enq: rc = %d\n",
+						rc);
+					if (!cargs->reuse_packet)
+						odp_packet_free(pkt);
+					break;
+				}
+				packets_sent += rc;
+			} else {
+				rc = odp_crypto_op(&pkt, &out_pkt,
+						   &params, 1);
+				if (rc <= 0) {
+					app_err("failed odp_crypto_packet_op: rc = %d\n",
+						rc);
+					if (!cargs->reuse_packet)
+						odp_packet_free(pkt);
+					break;
+				}
+				packets_sent += rc;
+				packets_received++;
+				if (cargs->debug_packets) {
+					mem = odp_packet_data(out_pkt);
+					print_mem("Immediately encrypted "
+						   "packet",
+						  mem,
+						  payload_length +
+						  config->session.
+						   auth_digest_len);
+				}
+				if (cargs->reuse_packet)
+					pkt = out_pkt;
+				else
+					odp_packet_free(out_pkt);
+			}
 		}
 
-		if (!posted) {
-			packets_received++;
-			if (cargs->debug_packets) {
-				mem = odp_packet_data(params.out_pkt);
-				print_mem("Immediately encrypted packet", mem,
-					  payload_length +
-					  config->session.auth_digest_len);
-			}
-			if (!cargs->in_place) {
-				if (cargs->reuse_packet) {
-					params.pkt = params.out_pkt;
-					params.out_pkt = ODP_PACKET_INVALID;
-				} else {
-					odp_packet_free(params.out_pkt);
-				}
-			}
-		} else {
+		if (cargs->schedule || cargs->poll) {
 			odp_event_t ev;
-			odp_crypto_compl_t compl;
-			odp_crypto_op_result_t result;
+			odp_crypto_packet_result_t result;
 			odp_packet_t out_pkt;
 
 			if (cargs->schedule)
@@ -602,25 +815,21 @@ run_measure_one(crypto_args_t *cargs,
 				ev = odp_queue_deq(out_queue);
 
 			while (ev != ODP_EVENT_INVALID) {
-				compl = odp_crypto_compl_from_event(ev);
-				odp_crypto_compl_result(compl, &result);
-				odp_crypto_compl_free(compl);
-				out_pkt = result.pkt;
+				out_pkt = odp_crypto_packet_from_event(ev);
+				odp_crypto_result(&result, out_pkt);
 
 				if (cargs->debug_packets) {
 					mem = odp_packet_data(out_pkt);
-					print_mem("Receieved encrypted packet",
+					print_mem("Received encrypted packet",
 						  mem,
 						  payload_length +
 						  config->
 						  session.auth_digest_len);
 				}
-				if (cargs->reuse_packet) {
-					params.pkt = out_pkt;
-					params.out_pkt = ODP_PACKET_INVALID;
-				} else {
+				if (cargs->reuse_packet)
+					pkt = out_pkt;
+				else
 					odp_packet_free(out_pkt);
-				}
 				packets_received++;
 				if (cargs->schedule)
 					ev = odp_schedule(NULL,
@@ -649,22 +858,133 @@ run_measure_one(crypto_args_t *cargs,
 					cargs->iteration_count;
 	}
 
-	odp_packet_free(pkt);
+	if (cargs->reuse_packet)
+		odp_packet_free(pkt);
 
-	return rc;
+	return rc < 0 ? rc : 0;
+}
+
+static int check_cipher_alg(odp_crypto_capability_t *capa,
+			    odp_cipher_alg_t alg)
+{
+	switch (alg) {
+	case ODP_CIPHER_ALG_NULL:
+		if (capa->ciphers.bit.null)
+			return 0;
+		break;
+	case ODP_CIPHER_ALG_DES:
+		if (capa->ciphers.bit.des)
+			return 0;
+		break;
+	case ODP_CIPHER_ALG_3DES_CBC:
+		if (capa->ciphers.bit.trides_cbc)
+			return 0;
+		break;
+	case ODP_CIPHER_ALG_AES_CBC:
+		if (capa->ciphers.bit.aes_cbc)
+			return 0;
+		break;
+	case ODP_CIPHER_ALG_AES_CTR:
+		if (capa->ciphers.bit.aes_ctr)
+			return 0;
+		break;
+	case ODP_CIPHER_ALG_AES_GCM:
+		if (capa->ciphers.bit.aes_gcm)
+			return 0;
+		break;
+	case ODP_CIPHER_ALG_AES_CCM:
+		if (capa->ciphers.bit.aes_ccm)
+			return 0;
+		break;
+	case ODP_CIPHER_ALG_CHACHA20_POLY1305:
+		if (capa->ciphers.bit.chacha20_poly1305)
+			return 0;
+		break;
+	default:
+		break;
+	}
+
+	return -1;
+}
+
+static int check_auth_alg(odp_crypto_capability_t *capa,
+			  odp_auth_alg_t alg)
+{
+	switch (alg) {
+	case ODP_AUTH_ALG_NULL:
+		if (capa->auths.bit.null)
+			return 0;
+		break;
+	case ODP_AUTH_ALG_MD5_HMAC:
+		if (capa->auths.bit.md5_hmac)
+			return 0;
+		break;
+	case ODP_AUTH_ALG_SHA1_HMAC:
+		if (capa->auths.bit.sha1_hmac)
+			return 0;
+		break;
+	case ODP_AUTH_ALG_SHA256_HMAC:
+		if (capa->auths.bit.sha256_hmac)
+			return 0;
+		break;
+	case ODP_AUTH_ALG_SHA384_HMAC:
+		if (capa->auths.bit.sha384_hmac)
+			return 0;
+		break;
+	case ODP_AUTH_ALG_SHA512_HMAC:
+		if (capa->auths.bit.sha512_hmac)
+			return 0;
+		break;
+	case ODP_AUTH_ALG_AES_GCM:
+		if (capa->auths.bit.aes_gcm)
+			return 0;
+		break;
+	case ODP_AUTH_ALG_AES_GMAC:
+		if (capa->auths.bit.aes_gmac)
+			return 0;
+		break;
+	case ODP_AUTH_ALG_AES_CCM:
+		if (capa->auths.bit.aes_ccm)
+			return 0;
+		break;
+	case ODP_AUTH_ALG_CHACHA20_POLY1305:
+		if (capa->auths.bit.chacha20_poly1305)
+			return 0;
+		break;
+	default:
+		break;
+	}
+
+	return -1;
 }
 
 /**
  * Process one algorithm. Note if paload size is specicified it is
  * only one run. Or iterate over set of predefined payloads.
  */
-static int
-run_measure_one_config(crypto_args_t *cargs,
-		       crypto_alg_config_t *config)
+static int run_measure_one_config(test_run_arg_t *arg)
 {
 	crypto_run_result_t result;
 	odp_crypto_session_t session;
+	crypto_args_t *cargs = &arg->crypto_args;
+	crypto_alg_config_t *config = arg->crypto_alg_config;
+	odp_crypto_capability_t crypto_capa = arg->crypto_capa;
 	int rc = 0;
+
+	if (check_cipher_alg(&crypto_capa, config->session.cipher_alg)) {
+		printf("    Cipher algorithm not supported\n");
+		rc = 1;
+	}
+
+	if (check_auth_alg(&crypto_capa, config->session.auth_alg)) {
+		printf("    Auth algorithm not supported\n");
+		rc = 1;
+	}
+
+	if (rc) {
+		printf("    => %s skipped\n\n", config->name);
+		return 0;
+	}
 
 	if (create_session_from_config(&session, config, cargs))
 		return -1;
@@ -696,17 +1016,9 @@ run_measure_one_config(crypto_args_t *cargs,
 	return rc;
 }
 
-typedef struct thr_arg {
-	crypto_args_t crypto_args;
-	crypto_alg_config_t *crypto_alg_config;
-} thr_arg_t;
-
 static int run_thr_func(void *arg)
 {
-	thr_arg_t *thr_args = (thr_arg_t *)arg;
-
-	run_measure_one_config(&thr_args->crypto_args,
-			       thr_args->crypto_alg_config);
+	run_measure_one_config((test_run_arg_t *)arg);
 	return 0;
 }
 
@@ -717,13 +1029,14 @@ int main(int argc, char *argv[])
 	odp_queue_param_t qparam;
 	odp_pool_param_t params;
 	odp_queue_t out_queue = ODP_QUEUE_INVALID;
-	thr_arg_t thr_arg;
+	test_run_arg_t test_run_arg;
 	odp_cpumask_t cpumask;
 	char cpumaskstr[ODP_CPUMASK_STR_SIZE];
 	int num_workers = 1;
 	odph_odpthread_t thr[num_workers];
 	odp_instance_t instance;
-	odp_pool_capability_t capa;
+	odp_pool_capability_t pool_capa;
+	odp_crypto_capability_t crypto_capa;
 	uint32_t max_seg_len;
 	unsigned i;
 
@@ -741,12 +1054,17 @@ int main(int argc, char *argv[])
 	/* Init this thread */
 	odp_init_local(instance, ODP_THREAD_WORKER);
 
-	if (odp_pool_capability(&capa)) {
+	if (odp_crypto_capability(&crypto_capa)) {
+		app_err("Crypto capability request failed.\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (odp_pool_capability(&pool_capa)) {
 		app_err("Pool capability request failed.\n");
 		exit(EXIT_FAILURE);
 	}
 
-	max_seg_len = capa.pkt.max_seg_len;
+	max_seg_len = pool_capa.pkt.max_seg_len;
 
 	for (i = 0; i < sizeof(payloads) / sizeof(unsigned int); i++) {
 		if (payloads[i] > max_seg_len)
@@ -789,9 +1107,6 @@ int main(int argc, char *argv[])
 
 	if (cargs.schedule) {
 		printf("Run in async scheduled mode\n");
-
-		thr_arg.crypto_args = cargs;
-		thr_arg.crypto_alg_config = cargs.alg_config;
 		num_workers = odp_cpumask_default_worker(&cpumask,
 							 num_workers);
 		(void)odp_cpumask_to_str(&cpumask, cpumaskstr,
@@ -810,12 +1125,16 @@ int main(int argc, char *argv[])
 
 	memset(thr, 0, sizeof(thr));
 
+	test_run_arg.crypto_args       = cargs;
+	test_run_arg.crypto_alg_config = cargs.alg_config;
+	test_run_arg.crypto_capa       = crypto_capa;
+
 	if (cargs.alg_config) {
 		odph_odpthread_params_t thr_params;
 
 		memset(&thr_params, 0, sizeof(thr_params));
 		thr_params.start    = run_thr_func;
-		thr_params.arg      = &thr_arg;
+		thr_params.arg      = &test_run_arg;
 		thr_params.thr_type = ODP_THREAD_WORKER;
 		thr_params.instance = instance;
 
@@ -823,7 +1142,7 @@ int main(int argc, char *argv[])
 			odph_odpthreads_create(&thr[0], &cpumask, &thr_params);
 			odph_odpthreads_join(&thr[0]);
 		} else {
-			run_measure_one_config(&cargs, cargs.alg_config);
+			run_measure_one_config(&test_run_arg);
 		}
 	} else {
 		unsigned int i;
@@ -831,10 +1150,13 @@ int main(int argc, char *argv[])
 		for (i = 0;
 		     i < (sizeof(algs_config) / sizeof(crypto_alg_config_t));
 		     i++) {
-			run_measure_one_config(&cargs, algs_config + i);
+			test_run_arg.crypto_alg_config = algs_config + i;
+			run_measure_one_config(&test_run_arg);
 		}
 	}
 
+	if (cargs.schedule || cargs.poll)
+		odp_queue_destroy(out_queue);
 	if (odp_pool_destroy(pool)) {
 		app_err("Error: pool destroy\n");
 		exit(EXIT_FAILURE);
@@ -875,7 +1197,7 @@ static void parse_args(int argc, char *argv[], crypto_args_t *cargs)
 	static const char *shortopts = "+a:c:df:hi:m:nl:spr";
 
 	/* let helper collect its own arguments (e.g. --odph_proc) */
-	odph_parse_options(argc, argv, shortopts, longopts);
+	argc = odph_parse_options(argc, argv);
 
 	cargs->in_place = 0;
 	cargs->in_flight = 1;
@@ -885,8 +1207,6 @@ static void parse_args(int argc, char *argv[], crypto_args_t *cargs)
 	cargs->alg_config = NULL;
 	cargs->reuse_packet = 0;
 	cargs->schedule = 0;
-
-	opterr = 0; /* do not issue errors on helper options */
 
 	while (1) {
 		opt = getopt_long(argc, argv, shortopts, longopts, &long_index);

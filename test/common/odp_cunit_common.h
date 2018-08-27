@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, Linaro Limited
+/* Copyright (c) 2014-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -15,8 +15,7 @@
 
 #include <stdint.h>
 #include <inttypes.h>
-#include "CUnit/Basic.h"
-#include "CUnit/TestDB.h"
+#include <CUnit/Basic.h>
 #include <odp_api.h>
 
 #define MAX_WORKERS 32 /**< Maximum number of work threads */
@@ -24,16 +23,16 @@
 typedef int (*cunit_test_check_active)(void);
 
 typedef struct {
-	const char *pName;
-	CU_TestFunc pTestFunc;
+	const char             *name;
+	CU_TestFunc             test_func;
 	cunit_test_check_active check_active;
 } odp_testinfo_t;
 
 typedef struct {
-	const char       *pName;
-	CU_InitializeFunc pInitFunc;
-	CU_CleanupFunc    pCleanupFunc;
-	odp_testinfo_t   *pTests;
+	const char       *name;
+	CU_InitializeFunc init_func;
+	CU_CleanupFunc    term_func;
+	odp_testinfo_t   *testinfo_tbl;
 } odp_suiteinfo_t;
 
 static inline int odp_cunit_test_inactive(void) { return 0; }
@@ -102,5 +101,7 @@ int odp_cunit_thread_exit(pthrd_arg *);
 void odp_cunit_register_global_init(int (*func_init_ptr)(odp_instance_t *inst));
 
 void odp_cunit_register_global_term(int (*func_term_ptr)(odp_instance_t inst));
+
+int odp_cunit_ret(int val);
 
 #endif /* ODP_CUNICT_COMMON_H */

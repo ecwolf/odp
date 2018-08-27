@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, Linaro Limited
+/* Copyright (c) 2015-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -21,6 +21,18 @@ typedef struct cls_packet_info {
 	bool	ipv6;
 	uint32_t len;
 } cls_packet_info_t;
+
+typedef union odp_cls_testcase {
+	struct  {
+		uint32_t default_cos:1;
+		uint32_t error_cos:1;
+		uint32_t pmr_chain:1;
+		uint32_t l2_priority:1;
+		uint32_t pmr_cos:1;
+		uint32_t pmr_composite_cos:1;
+	};
+	uint32_t all_bits;
+} odp_cls_testcase_u;
 
 extern odp_testinfo_t classification_suite[];
 extern odp_testinfo_t classification_suite_basic[];

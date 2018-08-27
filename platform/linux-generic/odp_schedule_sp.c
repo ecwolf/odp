@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, Linaro Limited
+/* Copyright (c) 2016-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -9,7 +9,9 @@
 #include <string.h>
 #include <odp/api/ticketlock.h>
 #include <odp/api/thread.h>
+#include <odp/api/plat/thread_inlines.h>
 #include <odp/api/time.h>
+#include <odp/api/plat/time_inlines.h>
 #include <odp/api/schedule.h>
 #include <odp/api/shared_memory.h>
 #include <odp_schedule_if.h>
@@ -17,6 +19,8 @@
 #include <odp_align_internal.h>
 #include <odp_config_internal.h>
 #include <odp_ring_internal.h>
+#include <odp_timer_internal.h>
+#include <odp_queue_basic_internal.h>
 
 #define NUM_THREAD        ODP_THREAD_COUNT_MAX
 #define NUM_QUEUE         ODP_CONFIG_QUEUES
@@ -60,20 +64,20 @@ struct sched_cmd_s {
 	int                pktin_idx[NUM_PKTIN];
 };
 
-typedef struct sched_cmd_t {
+typedef struct ODP_ALIGNED_CACHE sched_cmd_t {
 	struct sched_cmd_s s;
 	uint8_t            pad[ROUNDUP_CACHE_LINE(sizeof(struct sched_cmd_s)) -
 			       sizeof(struct sched_cmd_s)];
-} sched_cmd_t ODP_ALIGNED_CACHE;
+} sched_cmd_t;
 
-typedef struct {
+typedef struct ODP_ALIGNED_CACHE {
 	/* Ring header */
 	ring_t ring;
 
 	/* Ring data: queue indexes */
 	uint32_t ring_idx[RING_SIZE];
 
-} prio_queue_t ODP_ALIGNED_CACHE;
+} prio_queue_t;
 
 typedef struct thr_group_t {
 	/* A generation counter for fast comparison if groups have changed */
@@ -87,7 +91,7 @@ typedef struct thr_group_t {
 
 } thr_group_t;
 
-typedef struct sched_group_t {
+typedef struct ODP_ALIGNED_CACHE sched_group_t {
 	struct {
 		odp_ticketlock_t  lock;
 
@@ -103,7 +107,7 @@ typedef struct sched_group_t {
 
 	} s;
 
-} sched_group_t ODP_ALIGNED_CACHE;
+} sched_group_t;
 
 typedef struct {
 	sched_cmd_t   queue_cmd[NUM_QUEUE];
@@ -224,7 +228,7 @@ static int term_global(void)
 	for (qi = 0; qi < NUM_QUEUE; qi++) {
 		if (sched_global->queue_cmd[qi].s.init) {
 			/* todo: dequeue until empty ? */
-			sched_cb_queue_destroy_finalize(qi);
+			sched_queue_destroy_finalize(qi);
 		}
 	}
 
@@ -242,7 +246,7 @@ static int term_local(void)
 	return 0;
 }
 
-static unsigned max_ordered_locks(void)
+static uint32_t max_ordered_locks(void)
 {
 	return NUM_ORDERED_LOCKS;
 }
@@ -411,10 +415,10 @@ static int sched_queue(uint32_t qi)
 	return 0;
 }
 
-static int ord_enq_multi(queue_t q_int, void *buf_hdr[], int num,
+static int ord_enq_multi(odp_queue_t queue, void *buf_hdr[], int num,
 			 int *ret)
 {
-	(void)q_int;
+	(void)queue;
 	(void)buf_hdr;
 	(void)num;
 	(void)ret;
@@ -423,7 +427,10 @@ static int ord_enq_multi(queue_t q_int, void *buf_hdr[], int num,
 	return 0;
 }
 
-static void pktio_start(int pktio_index, int num, int pktin_idx[])
+static void pktio_start(int pktio_index,
+			int num,
+			int pktin_idx[],
+			odp_queue_t odpq[] ODP_UNUSED)
 {
 	int i;
 	sched_cmd_t *cmd;
@@ -500,7 +507,7 @@ static int schedule_multi(odp_queue_t *from, uint64_t wait,
 
 	if (sched_local.cmd) {
 		/* Continue scheduling if queue is not empty */
-		if (sched_cb_queue_empty(sched_local.cmd->s.index) == 0)
+		if (sched_queue_empty(sched_local.cmd->s.index) == 0)
 			add_tail(sched_local.cmd);
 
 		sched_local.cmd = NULL;
@@ -514,11 +521,14 @@ static int schedule_multi(odp_queue_t *from, uint64_t wait,
 		uint32_t qi;
 		int num;
 
+		timer_run();
+
 		cmd = sched_cmd();
 
 		if (cmd && cmd->s.type == CMD_PKTIO) {
-			if (sched_cb_pktin_poll(cmd->s.index, cmd->s.num_pktin,
-						cmd->s.pktin_idx)) {
+			if (sched_cb_pktin_poll_old(cmd->s.index,
+						    cmd->s.num_pktin,
+						    cmd->s.pktin_idx)) {
 				/* Pktio stopped or closed. */
 				sched_cb_pktio_stop_finalize(cmd->s.index);
 			} else {
@@ -552,20 +562,20 @@ static int schedule_multi(odp_queue_t *from, uint64_t wait,
 		}
 
 		qi  = cmd->s.index;
-		num = sched_cb_queue_deq_multi(qi, events, 1);
+		num = sched_queue_deq(qi, events, 1, 1);
 
 		if (num > 0) {
 			sched_local.cmd = cmd;
 
 			if (from)
-				*from = sched_cb_queue_handle(qi);
+				*from = queue_from_index(qi);
 
 			return num;
 		}
 
 		if (num < 0) {
 			/* Destroyed queue */
-			sched_cb_queue_destroy_finalize(qi);
+			sched_queue_destroy_finalize(qi);
 			continue;
 		}
 
@@ -806,12 +816,29 @@ static int schedule_group_info(odp_schedule_group_t group,
 	return 0;
 }
 
-static void schedule_order_lock(unsigned lock_index)
+static void schedule_order_lock(uint32_t lock_index)
 {
 	(void)lock_index;
 }
 
-static void schedule_order_unlock(unsigned lock_index)
+static void schedule_order_unlock(uint32_t lock_index)
+{
+	(void)lock_index;
+}
+
+static void schedule_order_unlock_lock(uint32_t unlock_index,
+				       uint32_t lock_index)
+{
+	(void)unlock_index;
+	(void)lock_index;
+}
+
+static void schedule_order_lock_start(uint32_t lock_index)
+{
+	(void)lock_index;
+}
+
+static void schedule_order_lock_wait(uint32_t lock_index)
 {
 	(void)lock_index;
 }
@@ -865,5 +892,8 @@ const schedule_api_t schedule_sp_api = {
 	.schedule_group_thrmask   = schedule_group_thrmask,
 	.schedule_group_info      = schedule_group_info,
 	.schedule_order_lock      = schedule_order_lock,
-	.schedule_order_unlock    = schedule_order_unlock
+	.schedule_order_unlock    = schedule_order_unlock,
+	.schedule_order_unlock_lock	= schedule_order_unlock_lock,
+	.schedule_order_lock_start	= schedule_order_lock_start,
+	.schedule_order_lock_wait	= schedule_order_lock_wait
 };

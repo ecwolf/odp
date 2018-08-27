@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, Linaro Limited
+/* Copyright (c) 2014-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -326,7 +326,7 @@ void ipv4_adjust_len(odph_ipv4hdr_t *ip, int adj)
  * @return TRUE if all OK else FALSE
  */
 static inline
-odp_bool_t is_crypto_compl_status_ok(odp_crypto_compl_status_t *status)
+odp_bool_t is_crypto_op_status_ok(odp_crypto_op_status_t *status)
 {
 	if (status->alg_err != ODP_CRYPTO_ALG_ERR_NONE)
 		return FALSE;

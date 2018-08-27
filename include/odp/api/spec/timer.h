@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, Linaro Limited
+/* Copyright (c) 2013-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -11,8 +11,8 @@
  * ODP timer service
  */
 
-#ifndef ODP_API_TIMER_H_
-#define ODP_API_TIMER_H_
+#ifndef ODP_API_SPEC_TIMER_H_
+#define ODP_API_SPEC_TIMER_H_
 #include <odp/visibility_begin.h>
 
 #ifdef __cplusplus
@@ -130,6 +130,33 @@ typedef struct {
 	odp_timer_clk_src_t clk_src;
 
 } odp_timer_pool_param_t;
+
+/**
+ * Timer capability
+ */
+typedef struct {
+	/** Highest timer resolution in nanoseconds.
+	 *
+	 *  This defines the highest resolution supported by a timer.
+	 *  It's the minimum valid value for 'res_ns' timer pool
+	 *  parameter.
+	 */
+	uint64_t highest_res_ns;
+} odp_timer_capability_t;
+
+/**
+ * Query timer capabilities
+ *
+ * Outputs timer capabilities on success.
+ *
+ * @param      clk_src  Clock source for timers
+ * @param[out] capa     Pointer to capability structure for output
+ *
+ * @retval 0 on success
+ * @retval <0 on failure
+ */
+int odp_timer_capability(odp_timer_clk_src_t clk_src,
+			 odp_timer_capability_t *capa);
 
 /**
  * Create a timer pool

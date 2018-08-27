@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, Linaro Limited
+/* Copyright (c) 2013-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -11,16 +11,16 @@
  * ODP queue
  */
 
-#ifndef ODP_API_QUEUE_H_
-#define ODP_API_QUEUE_H_
+#ifndef ODP_API_SPEC_QUEUE_H_
+#define ODP_API_SPEC_QUEUE_H_
 #include <odp/visibility_begin.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include <odp/api/schedule_types.h>
 #include <odp/api/event.h>
+#include <odp/api/spec/queue_types.h>
 
 /** @defgroup odp_queue ODP QUEUE
  *  Macros and operation on a queue.
@@ -33,11 +33,6 @@ extern "C" {
  */
 
 /**
- * @typedef odp_queue_group_t
- * Queue group instance type
- */
-
-/**
  * @def ODP_QUEUE_INVALID
  * Invalid queue
  */
@@ -46,163 +41,6 @@ extern "C" {
  * @def ODP_QUEUE_NAME_LEN
  * Maximum queue name length in chars including null char
  */
-
-/**
- * Queue type
- */
-typedef enum odp_queue_type_t {
-	/** Plain queue
-	  *
-	  * Plain queues offer simple FIFO storage of events. Application may
-	  * dequeue directly from these queues. */
-	ODP_QUEUE_TYPE_PLAIN = 0,
-
-	/** Scheduled queue
-	  *
-	  * Scheduled queues are connected to the scheduler. Application must
-	  * not dequeue events directly from these queues but use the scheduler
-	  * instead. */
-	ODP_QUEUE_TYPE_SCHED
-} odp_queue_type_t;
-
-/**
- * Queue operation mode
- */
-typedef enum odp_queue_op_mode_t {
-	/** Multithread safe operation
-	  *
-	  * Queue operation (enqueue or dequeue) is multithread safe. Any
-	  * number of application threads may perform the operation
-	  * concurrently. */
-	ODP_QUEUE_OP_MT = 0,
-
-	/** Not multithread safe operation
-	  *
-	  * Queue operation (enqueue or dequeue) may not be multithread safe.
-	  * Application ensures synchronization between threads so that
-	  * simultaneously only single thread attempts the operation on
-	  * the same queue. */
-	ODP_QUEUE_OP_MT_UNSAFE,
-
-	/** Disabled
-	  *
-	  * Direct enqueue or dequeue operation from application is disabled.
-	  * An attempt to enqueue/dequeue directly will result undefined
-	  * behaviour. Various ODP functions (e.g. packet input, timer,
-	  * crypto, scheduler, etc) are able to perform enqueue or
-	  * dequeue operations normally on the queue.
-	  * */
-	ODP_QUEUE_OP_DISABLED
-
-} odp_queue_op_mode_t;
-
-/**
- * Queue capabilities
- */
-typedef struct odp_queue_capability_t {
-	/** Maximum number of event queues of any type (default size). Use
-	  * this in addition to queue type specific 'max_num', if both queue
-	  * types are used simultaneously. */
-	uint32_t max_queues;
-
-	/** Maximum number of ordered locks per queue */
-	unsigned max_ordered_locks;
-
-	/** Maximum number of scheduling groups */
-	unsigned max_sched_groups;
-
-	/** Number of scheduling priorities */
-	unsigned sched_prios;
-
-	/** Plain queue capabilities */
-	struct {
-		/** Maximum number of plain queues of the default size. */
-		uint32_t max_num;
-
-		/** Maximum number of events a plain queue can store
-		  * simultaneously. The value of zero means that plain
-		  * queues do not have a size limit, but a single queue can
-		  * store all available events. */
-		uint32_t max_size;
-
-	} plain;
-
-	/** Scheduled queue capabilities */
-	struct {
-		/** Maximum number of scheduled queues of the default size. */
-		uint32_t max_num;
-
-		/** Maximum number of events a scheduled queue can store
-		  * simultaneously. The value of zero means that scheduled
-		  * queues do not have a size limit, but a single queue can
-		  * store all available events. */
-		uint32_t max_size;
-
-	} sched;
-
-} odp_queue_capability_t;
-
-/**
- * ODP Queue parameters
- */
-typedef struct odp_queue_param_t {
-	/** Queue type
-	  *
-	  * Valid values for other parameters in this structure depend on
-	  * the queue type. */
-	odp_queue_type_t type;
-
-	/** Enqueue mode
-	  *
-	  * Default value for both queue types is ODP_QUEUE_OP_MT. Application
-	  * may enable performance optimizations by defining MT_UNSAFE or
-	  * DISABLED modes when applicable. */
-	odp_queue_op_mode_t enq_mode;
-
-	/** Dequeue mode
-	  *
-	  * For PLAIN queues, the default value is ODP_QUEUE_OP_MT. Application
-	  * may enable performance optimizations by defining MT_UNSAFE or
-	  * DISABLED modes when applicable. However, when a plain queue is input
-	  * to the implementation (e.g. a queue for packet output), the
-	  * parameter is ignored in queue creation and the value is
-	  * ODP_QUEUE_OP_DISABLED.
-	  *
-	  * For SCHED queues, the parameter is ignored in queue creation and
-	  * the value is ODP_QUEUE_OP_DISABLED. */
-	odp_queue_op_mode_t deq_mode;
-
-	/** Scheduler parameters
-	  *
-	  * These parameters are considered only when queue type is
-	  * ODP_QUEUE_TYPE_SCHED. */
-	odp_schedule_param_t sched;
-
-	/** Queue context pointer
-	  *
-	  * User defined context pointer associated with the queue. The same
-	  * pointer can be accessed with odp_queue_context() and
-	  * odp_queue_context_set() calls. The implementation may read the
-	  * pointer for prefetching the context data. Default value of the
-	  * pointer is NULL. */
-	void *context;
-
-	/** Queue context data length
-	  *
-	  * User defined context data length in bytes for prefetching.
-	  * The implementation may use this value as a hint for the number of
-	  * context data bytes to prefetch. Default value is zero (no hint). */
-	uint32_t context_len;
-
-	/** Queue size
-	  *
-	  * The queue must be able to store at minimum this many events
-	  * simultaneously. The value must not exceed 'max_size' queue
-	  * capability. The value of zero means implementation specific
-	  * default size. */
-	uint32_t size;
-
-} odp_queue_param_t;
 
 /**
  * Queue create
@@ -309,7 +147,7 @@ int odp_queue_enq(odp_queue_t queue, odp_event_t ev);
  * has to take care of them.
  *
  * @param queue   Queue handle
- * @param[in] events Array of event handles
+ * @param events  Array of event handles
  * @param num     Number of event handles to enqueue
  *
  * @return Number of events actually enqueued (0 ... num)
@@ -393,10 +231,11 @@ odp_schedule_group_t odp_queue_sched_group(odp_queue_t queue);
  *
  * @param queue   Queue handle
  *
- * @return Number of ordered locks associated with this ordered queue
- * @retval <0 Specified queue is not ordered
+ * @return	Number of ordered locks associated with this ordered queue
+ * @retval 0	Specified queue is not ordered or no ordered lock associated
+ *		with the ordered queue.
  */
-int odp_queue_lock_count(odp_queue_t queue);
+uint32_t odp_queue_lock_count(odp_queue_t queue);
 
 /**
  * Get printable value for an odp_queue_t
@@ -421,15 +260,6 @@ uint64_t odp_queue_to_u64(odp_queue_t hdl);
  * @param param   Address of the odp_queue_param_t to be initialized
  */
 void odp_queue_param_init(odp_queue_param_t *param);
-
-/**
- * Queue information
- * Retrieve information about a queue with odp_queue_info()
- */
-typedef struct odp_queue_info_t {
-	const char *name;         /**< queue name */
-	odp_queue_param_t param;  /**< queue parameters */
-} odp_queue_info_t;
 
 /**
  * Retrieve information about a queue

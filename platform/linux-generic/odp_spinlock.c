@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, Linaro Limited
+/* Copyright (c) 2013-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -9,6 +9,8 @@
 #include <odp/api/spinlock.h>
 #include <odp/api/cpu.h>
 #include <odp_atomic_internal.h>
+
+#include <odp/api/plat/cpu_inlines.h>
 
 void odp_spinlock_init(odp_spinlock_t *spinlock)
 {

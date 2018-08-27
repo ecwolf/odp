@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, Linaro Limited
+/* Copyright (c) 2013-2018, Linaro Limited
  * Copyright (c) 2013, Nokia Solutions and Networks
  * All rights reserved.
  *
@@ -36,10 +36,13 @@
 
 #include <odp_api.h>
 #include <odp_packet_socket.h>
+#include <odp_socket_common.h>
 #include <odp_packet_internal.h>
 #include <odp_packet_io_internal.h>
+#include <odp_packet_io_stats.h>
 #include <odp_align_internal.h>
 #include <odp_debug_internal.h>
+#include <odp_errno_define.h>
 #include <odp_classification_datamodel.h>
 #include <odp_classification_inlines.h>
 #include <odp_classification_internal.h>
@@ -50,6 +53,21 @@
 
 #define MAX_SEGS          CONFIG_PACKET_MAX_SEGS
 #define PACKET_JUMBO_LEN  (9 * 1024)
+
+typedef struct {
+	int sockfd; /**< socket descriptor */
+	odp_pool_t pool; /**< pool to alloc packets from */
+	uint32_t mtu;    /**< maximum transmission unit */
+	unsigned char if_mac[ETH_ALEN];	/**< IF eth mac addr */
+} pkt_sock_t;
+
+ODP_STATIC_ASSERT(PKTIO_PRIVATE_SIZE >= sizeof(pkt_sock_t),
+		  "PKTIO_PRIVATE_SIZE too small");
+
+static inline pkt_sock_t *pkt_priv(pktio_entry_t *pktio_entry)
+{
+	return (pkt_sock_t *)(uintptr_t)(pktio_entry->s.pkt_priv);
+}
 
 static int disable_pktio; /** !0 this pktio disabled, 0 enabled */
 
@@ -100,364 +118,13 @@ int sendmmsg(int fd, struct mmsghdr *vmessages, unsigned int vlen, int flags)
 #define ETHBUF_ALIGN(buf_ptr) ((uint8_t *)ODP_ALIGN_ROUNDUP_PTR((buf_ptr), \
 				sizeof(uint32_t)) + ETHBUF_OFFSET)
 
-/**
- * ODP_PACKET_SOCKET_MMSG:
- * ODP_PACKET_SOCKET_MMAP:
- * ODP_PACKET_NETMAP:
- */
-int mac_addr_get_fd(int fd, const char *name, unsigned char mac_dst[])
-{
-	struct ifreq ethreq;
-	int ret;
-
-	memset(&ethreq, 0, sizeof(ethreq));
-	snprintf(ethreq.ifr_name, IF_NAMESIZE, "%s", name);
-	ret = ioctl(fd, SIOCGIFHWADDR, &ethreq);
-	if (ret != 0) {
-		__odp_errno = errno;
-		ODP_ERR("ioctl(SIOCGIFHWADDR): %s: \"%s\".\n", strerror(errno),
-			ethreq.ifr_name);
-		return -1;
-	}
-
-	memcpy(mac_dst, (unsigned char *)ethreq.ifr_ifru.ifru_hwaddr.sa_data,
-	       ETH_ALEN);
-	return 0;
-}
-
-/*
- * ODP_PACKET_SOCKET_MMSG:
- * ODP_PACKET_SOCKET_MMAP:
- * ODP_PACKET_NETMAP:
- */
-uint32_t mtu_get_fd(int fd, const char *name)
-{
-	struct ifreq ifr;
-	int ret;
-
-	snprintf(ifr.ifr_name, IF_NAMESIZE, "%s", name);
-	ret = ioctl(fd, SIOCGIFMTU, &ifr);
-	if (ret < 0) {
-		__odp_errno = errno;
-		ODP_DBG("ioctl(SIOCGIFMTU): %s: \"%s\".\n", strerror(errno),
-			ifr.ifr_name);
-		return 0;
-	}
-	return ifr.ifr_mtu;
-}
-
-/*
- * ODP_PACKET_SOCKET_MMSG:
- * ODP_PACKET_SOCKET_MMAP:
- * ODP_PACKET_NETMAP:
- */
-int promisc_mode_set_fd(int fd, const char *name, int enable)
-{
-	struct ifreq ifr;
-	int ret;
-
-	snprintf(ifr.ifr_name, IF_NAMESIZE, "%s", name);
-	ret = ioctl(fd, SIOCGIFFLAGS, &ifr);
-	if (ret < 0) {
-		__odp_errno = errno;
-		ODP_DBG("ioctl(SIOCGIFFLAGS): %s: \"%s\".\n", strerror(errno),
-			ifr.ifr_name);
-		return -1;
-	}
-
-	if (enable)
-		ifr.ifr_flags |= IFF_PROMISC;
-	else
-		ifr.ifr_flags &= ~(IFF_PROMISC);
-
-	ret = ioctl(fd, SIOCSIFFLAGS, &ifr);
-	if (ret < 0) {
-		__odp_errno = errno;
-		ODP_DBG("ioctl(SIOCSIFFLAGS): %s: \"%s\".\n", strerror(errno),
-			ifr.ifr_name);
-		return -1;
-	}
-	return 0;
-}
-
-/*
- * ODP_PACKET_SOCKET_MMSG:
- * ODP_PACKET_SOCKET_MMAP:
- * ODP_PACKET_NETMAP:
- */
-int promisc_mode_get_fd(int fd, const char *name)
-{
-	struct ifreq ifr;
-	int ret;
-
-	snprintf(ifr.ifr_name, IF_NAMESIZE, "%s", name);
-	ret = ioctl(fd, SIOCGIFFLAGS, &ifr);
-	if (ret < 0) {
-		__odp_errno = errno;
-		ODP_DBG("ioctl(SIOCGIFFLAGS): %s: \"%s\".\n", strerror(errno),
-			ifr.ifr_name);
-		return -1;
-	}
-
-	return !!(ifr.ifr_flags & IFF_PROMISC);
-}
-
-int link_status_fd(int fd, const char *name)
-{
-	struct ifreq ifr;
-	int ret;
-
-	snprintf(ifr.ifr_name, IF_NAMESIZE, "%s", name);
-	ret = ioctl(fd, SIOCGIFFLAGS, &ifr);
-	if (ret < 0) {
-		__odp_errno = errno;
-		ODP_DBG("ioctl(SIOCGIFFLAGS): %s: \"%s\".\n", strerror(errno),
-			ifr.ifr_name);
-		return -1;
-	}
-
-	return !!(ifr.ifr_flags & IFF_RUNNING);
-}
-
-/**
- * Get enabled hash options of a packet socket
- *
- * @param fd              Socket file descriptor
- * @param name            Interface name
- * @param flow_type       Packet flow type
- * @param options[out]    Enabled hash options
- *
- * @retval 0 on success
- * @retval <0 on failure
- */
-static inline int get_rss_hash_options(int fd, const char *name,
-				       uint32_t flow_type, uint64_t *options)
-{
-	struct ifreq ifr;
-	struct ethtool_rxnfc rsscmd;
-
-	memset(&ifr, 0, sizeof(ifr));
-	memset(&rsscmd, 0, sizeof(rsscmd));
-	*options = 0;
-
-	snprintf(ifr.ifr_name, IF_NAMESIZE, "%s", name);
-
-	rsscmd.cmd = ETHTOOL_GRXFH;
-	rsscmd.flow_type = flow_type;
-
-	ifr.ifr_data = (caddr_t)&rsscmd;
-
-	if (ioctl(fd, SIOCETHTOOL, &ifr) < 0)
-		return -1;
-
-	*options = rsscmd.data;
-	return 0;
-}
-
-int rss_conf_get_fd(int fd, const char *name,
-		    odp_pktin_hash_proto_t *hash_proto)
-{
-	uint64_t options;
-	int rss_enabled = 0;
-
-	memset(hash_proto, 0, sizeof(odp_pktin_hash_proto_t));
-
-	get_rss_hash_options(fd, name, IPV4_FLOW, &options);
-	if ((options & RXH_IP_SRC) && (options & RXH_IP_DST)) {
-		hash_proto->proto.ipv4 = 1;
-		rss_enabled++;
-	}
-	get_rss_hash_options(fd, name, TCP_V4_FLOW, &options);
-	if ((options & RXH_IP_SRC) && (options & RXH_IP_DST) &&
-	    (options & RXH_L4_B_0_1) && (options & RXH_L4_B_2_3)) {
-		hash_proto->proto.ipv4_tcp = 1;
-		rss_enabled++;
-	}
-	get_rss_hash_options(fd, name, UDP_V4_FLOW, &options);
-	if ((options & RXH_IP_SRC) && (options & RXH_IP_DST) &&
-	    (options & RXH_L4_B_0_1) && (options & RXH_L4_B_2_3)) {
-		hash_proto->proto.ipv4_udp = 1;
-		rss_enabled++;
-	}
-	get_rss_hash_options(fd, name, IPV6_FLOW, &options);
-	if ((options & RXH_IP_SRC) && (options & RXH_IP_DST)) {
-		hash_proto->proto.ipv6 = 1;
-		rss_enabled++;
-	}
-	get_rss_hash_options(fd, name, TCP_V6_FLOW, &options);
-	if ((options & RXH_IP_SRC) && (options & RXH_IP_DST) &&
-	    (options & RXH_L4_B_0_1) && (options & RXH_L4_B_2_3)) {
-		hash_proto->proto.ipv6_tcp = 1;
-		rss_enabled++;
-	}
-	get_rss_hash_options(fd, name, UDP_V6_FLOW, &options);
-	if ((options & RXH_IP_SRC) && (options & RXH_IP_DST) &&
-	    (options & RXH_L4_B_0_1) && (options & RXH_L4_B_2_3)) {
-		hash_proto->proto.ipv6_udp = 1;
-		rss_enabled++;
-	}
-	return rss_enabled;
-}
-
-/**
- * Set hash options of a packet socket
- *
- * @param fd              Socket file descriptor
- * @param name            Interface name
- * @param flow_type       Packet flow type
- * @param options         Hash options
- *
- * @retval 0 on success
- * @retval <0 on failure
- */
-static inline int set_rss_hash(int fd, const char *name,
-			       uint32_t flow_type, uint64_t options)
-{
-	struct ifreq ifr;
-	struct ethtool_rxnfc rsscmd;
-
-	memset(&rsscmd, 0, sizeof(rsscmd));
-
-	snprintf(ifr.ifr_name, IF_NAMESIZE, "%s", name);
-
-	rsscmd.cmd = ETHTOOL_SRXFH;
-	rsscmd.flow_type = flow_type;
-	rsscmd.data = options;
-
-	ifr.ifr_data = (caddr_t)&rsscmd;
-
-	if (ioctl(fd, SIOCETHTOOL, &ifr) < 0)
-		return -1;
-
-	return 0;
-}
-
-int rss_conf_set_fd(int fd, const char *name,
-		    const odp_pktin_hash_proto_t *hash_proto)
-{
-	uint64_t options;
-	odp_pktin_hash_proto_t cur_hash;
-
-	/* Compare to currently set hash protocols */
-	rss_conf_get_fd(fd, name, &cur_hash);
-
-	if (hash_proto->proto.ipv4_udp && !cur_hash.proto.ipv4_udp) {
-		options = RXH_IP_SRC | RXH_IP_DST | RXH_L4_B_0_1 | RXH_L4_B_2_3;
-		if (set_rss_hash(fd, name, UDP_V4_FLOW, options))
-			return -1;
-	}
-	if (hash_proto->proto.ipv4_tcp && !cur_hash.proto.ipv4_tcp) {
-		options = RXH_IP_SRC | RXH_IP_DST | RXH_L4_B_0_1 | RXH_L4_B_2_3;
-		if (set_rss_hash(fd, name, TCP_V4_FLOW, options))
-			return -1;
-	}
-	if (hash_proto->proto.ipv6_udp && !cur_hash.proto.ipv6_udp) {
-		options = RXH_IP_SRC | RXH_IP_DST | RXH_L4_B_0_1 | RXH_L4_B_2_3;
-		if (set_rss_hash(fd, name, UDP_V6_FLOW, options))
-			return -1;
-	}
-	if (hash_proto->proto.ipv6_tcp && !cur_hash.proto.ipv6_tcp) {
-		options = RXH_IP_SRC | RXH_IP_DST | RXH_L4_B_0_1 | RXH_L4_B_2_3;
-		if (set_rss_hash(fd, name, TCP_V6_FLOW, options))
-			return -1;
-	}
-	if (hash_proto->proto.ipv4 && !cur_hash.proto.ipv4) {
-		options = RXH_IP_SRC | RXH_IP_DST;
-		if (set_rss_hash(fd, name, IPV4_FLOW, options))
-			return -1;
-	}
-	if (hash_proto->proto.ipv6 && !cur_hash.proto.ipv6) {
-		options = RXH_IP_SRC | RXH_IP_DST;
-		if (set_rss_hash(fd, name, IPV6_FLOW, options))
-			return -1;
-	}
-	return 0;
-}
-
-int rss_conf_get_supported_fd(int fd, const char *name,
-			      odp_pktin_hash_proto_t *hash_proto)
-{
-	uint64_t options;
-	int rss_supported = 0;
-
-	memset(hash_proto, 0, sizeof(odp_pktin_hash_proto_t));
-
-	if (!get_rss_hash_options(fd, name, IPV4_FLOW, &options)) {
-		if (!set_rss_hash(fd, name, IPV4_FLOW, options)) {
-			hash_proto->proto.ipv4 = 1;
-			rss_supported++;
-		}
-	}
-	if (!get_rss_hash_options(fd, name, TCP_V4_FLOW, &options)) {
-		if (!set_rss_hash(fd, name, TCP_V4_FLOW, options)) {
-			hash_proto->proto.ipv4_tcp = 1;
-			rss_supported++;
-		}
-	}
-	if (!get_rss_hash_options(fd, name, UDP_V4_FLOW, &options)) {
-		if (!set_rss_hash(fd, name, UDP_V4_FLOW, options)) {
-			hash_proto->proto.ipv4_udp = 1;
-			rss_supported++;
-		}
-	}
-	if (!get_rss_hash_options(fd, name, IPV6_FLOW, &options)) {
-		if (!set_rss_hash(fd, name, IPV6_FLOW, options)) {
-			hash_proto->proto.ipv6 = 1;
-			rss_supported++;
-		}
-	}
-	if (!get_rss_hash_options(fd, name, TCP_V6_FLOW, &options)) {
-		if (!set_rss_hash(fd, name, TCP_V6_FLOW, options)) {
-			hash_proto->proto.ipv6_tcp = 1;
-			rss_supported++;
-		}
-	}
-	if (!get_rss_hash_options(fd, name, UDP_V6_FLOW, &options)) {
-		if (!set_rss_hash(fd, name, UDP_V6_FLOW, options)) {
-			hash_proto->proto.ipv6_udp = 1;
-			rss_supported++;
-		}
-	}
-	return rss_supported;
-}
-
-void rss_conf_print(const odp_pktin_hash_proto_t *hash_proto)
-{	int max_len = 512;
-	char str[max_len];
-	int len = 0;
-	int n = max_len - 1;
-
-	len += snprintf(&str[len], n - len, " rss conf\n");
-
-	if (hash_proto->proto.ipv4)
-		len += snprintf(&str[len], n - len,
-				"    IPV4\n");
-	if (hash_proto->proto.ipv4_tcp)
-		len += snprintf(&str[len], n - len,
-				"    IPV4 TCP\n");
-	if (hash_proto->proto.ipv4_udp)
-		len += snprintf(&str[len], n - len,
-				"    IPV4 UDP\n");
-	if (hash_proto->proto.ipv6)
-		len += snprintf(&str[len], n - len,
-				"    IPV6\n");
-	if (hash_proto->proto.ipv6_tcp)
-		len += snprintf(&str[len], n - len,
-				"    IPV6 TCP\n");
-	if (hash_proto->proto.ipv6_udp)
-		len += snprintf(&str[len], n - len,
-				"    IPV6 UDP\n");
-	str[len] = '\0';
-
-	ODP_PRINT("%s\n", str);
-}
-
 /*
  * ODP_PACKET_SOCKET_MMSG:
  */
 static int sock_close(pktio_entry_t *pktio_entry)
 {
-	pkt_sock_t *pkt_sock = &pktio_entry->s.pkt_sock;
+	pkt_sock_t *pkt_sock = pkt_priv(pktio_entry);
+
 	if (pkt_sock->sockfd != -1 && close(pkt_sock->sockfd) != 0) {
 		__odp_errno = errno;
 		ODP_ERR("close(sockfd): %s\n", strerror(errno));
@@ -479,8 +146,7 @@ static int sock_setup_pkt(pktio_entry_t *pktio_entry, const char *netdev,
 	struct ifreq ethreq;
 	struct sockaddr_ll sa_ll;
 	char shm_name[ODP_SHM_NAME_LEN];
-	pkt_sock_t *pkt_sock = &pktio_entry->s.pkt_sock;
-	odp_pktio_stats_t cur_stats;
+	pkt_sock_t *pkt_sock = pkt_priv(pktio_entry);
 
 	/* Init pktio entry */
 	memset(pkt_sock, 0, sizeof(*pkt_sock));
@@ -532,21 +198,10 @@ static int sock_setup_pkt(pktio_entry_t *pktio_entry, const char *netdev,
 		goto error;
 	}
 
-	err = ethtool_stats_get_fd(pktio_entry->s.pkt_sock.sockfd,
-				   pktio_entry->s.name,
-				   &cur_stats);
-	if (err != 0) {
-		err = sysfs_stats(pktio_entry, &cur_stats);
-		if (err != 0) {
-			pktio_entry->s.stats_type = STATS_UNSUPPORTED;
-			ODP_DBG("pktio: %s unsupported stats\n",
-				pktio_entry->s.name);
-		} else {
-		pktio_entry->s.stats_type = STATS_SYSFS;
-		}
-	} else {
-		pktio_entry->s.stats_type = STATS_ETHTOOL;
-	}
+	pktio_entry->s.stats_type = sock_stats_type_fd(pktio_entry,
+						       pkt_sock->sockfd);
+	if (pktio_entry->s.stats_type == STATS_UNSUPPORTED)
+		ODP_DBG("pktio: %s unsupported stats\n", pktio_entry->s.name);
 
 	err = sock_stats_reset(pktio_entry);
 	if (err != 0)
@@ -601,15 +256,15 @@ static uint32_t _rx_pkt_to_iovec(odp_packet_t pkt,
  * ODP_PACKET_SOCKET_MMSG:
  */
 static int sock_mmsg_recv(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
-			  odp_packet_t pkt_table[], int len)
+			  odp_packet_t pkt_table[], int num)
 {
-	pkt_sock_t *pkt_sock = &pktio_entry->s.pkt_sock;
+	pkt_sock_t *pkt_sock = pkt_priv(pktio_entry);
 	odp_pool_t pool = pkt_sock->pool;
 	odp_time_t ts_val;
 	odp_time_t *ts = NULL;
 	const int sockfd = pkt_sock->sockfd;
-	struct mmsghdr msgvec[len];
-	struct iovec iovecs[len][MAX_SEGS];
+	struct mmsghdr msgvec[num];
+	struct iovec iovecs[num][MAX_SEGS];
 	int nb_rx = 0;
 	int nb_pkts;
 	int recv_msgs;
@@ -623,7 +278,7 @@ static int sock_mmsg_recv(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
 
 	memset(msgvec, 0, sizeof(msgvec));
 
-	nb_pkts = packet_alloc_multi(pool, pkt_sock->mtu, pkt_table, len);
+	nb_pkts = packet_alloc_multi(pool, pkt_sock->mtu, pkt_table, num);
 	for (i = 0; i < nb_pkts; i++) {
 		msgvec[i].msg_hdr.msg_iovlen =
 			_rx_pkt_to_iovec(pkt_table[i], iovecs[i]);
@@ -639,10 +294,15 @@ static int sock_mmsg_recv(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
 		void *base = msgvec[i].msg_hdr.msg_iov->iov_base;
 		struct ethhdr *eth_hdr = base;
 		odp_packet_t pkt = pkt_table[i];
-		odp_packet_hdr_t *pkt_hdr = odp_packet_hdr(pkt);
+		odp_packet_hdr_t *pkt_hdr = packet_hdr(pkt);
 		uint16_t pkt_len = msgvec[i].msg_len;
 		int ret;
 
+		if (odp_unlikely(msgvec[i].msg_hdr.msg_flags & MSG_TRUNC)) {
+			odp_packet_free(pkt);
+			ODP_DBG("dropped truncated packet\n");
+			continue;
+		}
 		if (pktio_cls_enabled(pktio_entry)) {
 			uint16_t seg_len =  pkt_len;
 
@@ -650,7 +310,8 @@ static int sock_mmsg_recv(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
 				seg_len = msgvec[i].msg_hdr.msg_iov->iov_len;
 
 			if (cls_classify_packet(pktio_entry, base, pkt_len,
-						seg_len, &pool, pkt_hdr)) {
+						seg_len, &pool, pkt_hdr,
+						true)) {
 				ODP_ERR("cls_classify_packet failed");
 				odp_packet_free(pkt);
 				continue;
@@ -676,7 +337,8 @@ static int sock_mmsg_recv(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
 
 		if (!pktio_cls_enabled(pktio_entry))
 			packet_parse_layer(pkt_hdr,
-					   pktio_entry->s.config.parser.layer);
+					   pktio_entry->s.config.parser.layer,
+					   pktio_entry->s.in_chksums);
 
 		pkt_hdr->input = pktio_entry->s.handle;
 		packet_set_ts(pkt_hdr, ts);
@@ -691,6 +353,87 @@ static int sock_mmsg_recv(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
 	odp_ticketlock_unlock(&pktio_entry->s.rxl);
 
 	return nb_rx;
+}
+
+static int sock_fd_set(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
+		       fd_set *readfds)
+{
+	pkt_sock_t *pkt_sock = pkt_priv(pktio_entry);
+	const int sockfd = pkt_sock->sockfd;
+
+	FD_SET(sockfd, readfds);
+	return sockfd;
+}
+
+static int sock_recv_tmo(pktio_entry_t *pktio_entry, int index,
+			 odp_packet_t pkt_table[], int num, uint64_t usecs)
+{
+	struct timeval timeout;
+	int ret;
+	int maxfd;
+	fd_set readfds;
+
+	ret = sock_mmsg_recv(pktio_entry, index, pkt_table, num);
+	if (ret != 0)
+		return ret;
+
+	timeout.tv_sec = usecs / (1000 * 1000);
+	timeout.tv_usec = usecs - timeout.tv_sec * (1000ULL * 1000ULL);
+
+	FD_ZERO(&readfds);
+	maxfd = sock_fd_set(pktio_entry, index, &readfds);
+
+	if (select(maxfd + 1, &readfds, NULL, NULL, &timeout) == 0)
+		return 0;
+
+	return sock_mmsg_recv(pktio_entry, index, pkt_table, num);
+}
+
+static int sock_recv_mq_tmo(pktio_entry_t *pktio_entry[], int index[],
+			    int num_q, odp_packet_t pkt_table[], int num,
+			    unsigned *from, uint64_t usecs)
+{
+	struct timeval timeout;
+	int i;
+	int ret;
+	int maxfd = -1, maxfd2;
+	fd_set readfds;
+
+	for (i = 0; i < num_q; i++) {
+		ret = sock_mmsg_recv(pktio_entry[i], index[i], pkt_table, num);
+
+		if (ret > 0 && from)
+			*from = i;
+
+		if (ret != 0)
+			return ret;
+	}
+
+	timeout.tv_sec = usecs / (1000 * 1000);
+	timeout.tv_usec = usecs - timeout.tv_sec * (1000ULL * 1000ULL);
+
+	FD_ZERO(&readfds);
+
+	for (i = 0; i < num_q; i++) {
+		maxfd2 = sock_fd_set(pktio_entry[i], index[i], &readfds);
+		if (maxfd2 > maxfd)
+			maxfd = maxfd2;
+	}
+
+	if (select(maxfd + 1, &readfds, NULL, NULL, &timeout) == 0)
+		return 0;
+
+	for (i = 0; i < num_q; i++) {
+		ret = sock_mmsg_recv(pktio_entry[i], index[i], pkt_table, num);
+
+		if (ret > 0 && from)
+			*from = i;
+
+		if (ret != 0)
+			return ret;
+	}
+
+	return 0;
 }
 
 static uint32_t _tx_pkt_to_iovec(odp_packet_t pkt,
@@ -716,11 +459,11 @@ static uint32_t _tx_pkt_to_iovec(odp_packet_t pkt,
  * ODP_PACKET_SOCKET_MMSG:
  */
 static int sock_mmsg_send(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
-			  const odp_packet_t pkt_table[], int len)
+			  const odp_packet_t pkt_table[], int num)
 {
-	pkt_sock_t *pkt_sock = &pktio_entry->s.pkt_sock;
-	struct mmsghdr msgvec[len];
-	struct iovec iovecs[len][MAX_SEGS];
+	pkt_sock_t *pkt_sock = pkt_priv(pktio_entry);
+	struct mmsghdr msgvec[num];
+	struct iovec iovecs[num][MAX_SEGS];
 	int ret;
 	int sockfd;
 	int n, i;
@@ -730,14 +473,14 @@ static int sock_mmsg_send(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
 	sockfd = pkt_sock->sockfd;
 	memset(msgvec, 0, sizeof(msgvec));
 
-	for (i = 0; i < len; i++) {
+	for (i = 0; i < num; i++) {
 		msgvec[i].msg_hdr.msg_iov = iovecs[i];
 		msgvec[i].msg_hdr.msg_iovlen = _tx_pkt_to_iovec(pkt_table[i],
 				iovecs[i]);
 	}
 
-	for (i = 0; i < len; ) {
-		ret = sendmmsg(sockfd, &msgvec[i], len - i, MSG_DONTWAIT);
+	for (i = 0; i < num; ) {
+		ret = sendmmsg(sockfd, &msgvec[i], num - i, MSG_DONTWAIT);
 		if (odp_unlikely(ret <= -1)) {
 			if (i == 0 && SOCK_ERR_REPORT(errno)) {
 				__odp_errno = errno;
@@ -764,7 +507,7 @@ static int sock_mmsg_send(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
  */
 static uint32_t sock_mtu_get(pktio_entry_t *pktio_entry)
 {
-	return pktio_entry->s.pkt_sock.mtu;
+	return pkt_priv(pktio_entry)->mtu;
 }
 
 /*
@@ -773,7 +516,7 @@ static uint32_t sock_mtu_get(pktio_entry_t *pktio_entry)
 static int sock_mac_addr_get(pktio_entry_t *pktio_entry,
 			     void *mac_addr)
 {
-	memcpy(mac_addr, pktio_entry->s.pkt_sock.if_mac, ETH_ALEN);
+	memcpy(mac_addr, pkt_priv(pktio_entry)->if_mac, ETH_ALEN);
 	return ETH_ALEN;
 }
 
@@ -783,7 +526,7 @@ static int sock_mac_addr_get(pktio_entry_t *pktio_entry,
 static int sock_promisc_mode_set(pktio_entry_t *pktio_entry,
 				 odp_bool_t enable)
 {
-	return promisc_mode_set_fd(pktio_entry->s.pkt_sock.sockfd,
+	return promisc_mode_set_fd(pkt_priv(pktio_entry)->sockfd,
 				   pktio_entry->s.name, enable);
 }
 
@@ -792,13 +535,13 @@ static int sock_promisc_mode_set(pktio_entry_t *pktio_entry,
  */
 static int sock_promisc_mode_get(pktio_entry_t *pktio_entry)
 {
-	return promisc_mode_get_fd(pktio_entry->s.pkt_sock.sockfd,
+	return promisc_mode_get_fd(pkt_priv(pktio_entry)->sockfd,
 				   pktio_entry->s.name);
 }
 
 static int sock_link_status(pktio_entry_t *pktio_entry)
 {
-	return link_status_fd(pktio_entry->s.pkt_sock.sockfd,
+	return link_status_fd(pkt_priv(pktio_entry)->sockfd,
 			      pktio_entry->s.name);
 }
 
@@ -827,7 +570,7 @@ static int sock_stats(pktio_entry_t *pktio_entry,
 
 	return sock_stats_fd(pktio_entry,
 			     stats,
-			     pktio_entry->s.pkt_sock.sockfd);
+			     pkt_priv(pktio_entry)->sockfd);
 }
 
 static int sock_stats_reset(pktio_entry_t *pktio_entry)
@@ -839,7 +582,7 @@ static int sock_stats_reset(pktio_entry_t *pktio_entry)
 	}
 
 	return sock_stats_reset_fd(pktio_entry,
-				   pktio_entry->s.pkt_sock.sockfd);
+				   pkt_priv(pktio_entry)->sockfd);
 }
 
 static int sock_init_global(void)
@@ -868,11 +611,15 @@ const pktio_if_ops_t sock_mmsg_pktio_ops = {
 	.stats = sock_stats,
 	.stats_reset = sock_stats_reset,
 	.recv = sock_mmsg_recv,
+	.recv_tmo = sock_recv_tmo,
+	.recv_mq_tmo = sock_recv_mq_tmo,
+	.fd_set = sock_fd_set,
 	.send = sock_mmsg_send,
 	.mtu_get = sock_mtu_get,
 	.promisc_mode_set = sock_promisc_mode_set,
 	.promisc_mode_get = sock_promisc_mode_get,
 	.mac_get = sock_mac_addr_get,
+	.mac_set = NULL,
 	.link_status = sock_link_status,
 	.capability = sock_capability,
 	.pktin_ts_res = NULL,

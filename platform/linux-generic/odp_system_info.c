@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, Linaro Limited
+/* Copyright (c) 2013-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -17,7 +17,9 @@
 
 #include <odp/api/system_info.h>
 #include <odp/api/version.h>
-#include <odp_internal.h>
+#include <odp_global_data.h>
+#include <odp_sysinfo_internal.h>
+#include <odp_init_internal.h>
 #include <odp_debug_internal.h>
 #include <odp/api/align.h>
 #include <odp/api/cpu.h>
@@ -263,7 +265,7 @@ static char *get_hugepage_dir(uint64_t hugepage_sz)
 /*
  * Analysis of /sys/devices/system/cpu/cpu%d/cpufreq/ files
  */
-uint64_t odp_cpufreq_id(const char *filename, int id)
+static uint64_t read_cpufreq(const char *filename, int id)
 {
 	char path[256], buffer[256], *endptr = NULL;
 	FILE *file;
@@ -341,22 +343,24 @@ int odp_system_info_init(void)
 
 	odp_global_data.system_info.page_size = ODP_PAGE_SIZE;
 
+	/* By default, read max frequency from a cpufreq file */
+	for (i = 0; i < CONFIG_NUM_CPU; i++) {
+		uint64_t cpu_hz_max = read_cpufreq("cpuinfo_max_freq", i);
+
+		if (cpu_hz_max)
+			odp_global_data.system_info.cpu_hz_max[i] = cpu_hz_max;
+	}
+
 	file = fopen("/proc/cpuinfo", "rt");
 	if (file == NULL) {
 		ODP_ERR("Failed to open /proc/cpuinfo\n");
 		return -1;
 	}
 
+	/* Read CPU model, and set max cpu frequency if not set from cpufreq. */
 	cpuinfo_parser(file, &odp_global_data.system_info);
 
 	fclose(file);
-
-	for (i = 0; i < MAX_CPU_NUMBER; i++) {
-		uint64_t cpu_hz_max = odp_cpufreq_id("cpuinfo_max_freq", i);
-
-		if (cpu_hz_max)
-			odp_global_data.system_info.cpu_hz_max[i] = cpu_hz_max;
-	}
 
 	if (systemcpu(&odp_global_data.system_info)) {
 		ODP_ERR("systemcpu failed\n");
@@ -385,7 +389,7 @@ int odp_system_info_term(void)
  */
 uint64_t odp_cpu_hz_current(int id)
 {
-	uint64_t cur_hz = odp_cpufreq_id("cpuinfo_cur_freq", id);
+	uint64_t cur_hz = read_cpufreq("cpuinfo_cur_freq", id);
 
 	if (!cur_hz)
 		cur_hz = odp_cpu_arch_hz_current(id);
@@ -412,7 +416,7 @@ uint64_t odp_cpu_hz_max(void)
 
 uint64_t odp_cpu_hz_max_id(int id)
 {
-	if (id >= 0 && id < MAX_CPU_NUMBER)
+	if (id >= 0 && id < CONFIG_NUM_CPU)
 		return odp_global_data.system_info.cpu_hz_max[id];
 	else
 		return 0;
@@ -471,7 +475,7 @@ const char *odp_cpu_model_str(void)
 
 const char *odp_cpu_model_str_id(int id)
 {
-	if (id >= 0 && id < MAX_CPU_NUMBER)
+	if (id >= 0 && id < CONFIG_NUM_CPU)
 		return odp_global_data.system_info.model_str[id];
 	else
 		return NULL;
@@ -489,26 +493,36 @@ int odp_cpu_count(void)
 
 void odp_sys_info_print(void)
 {
-	int len;
+	int len, num_cpu;
 	int max_len = 512;
+	odp_cpumask_t cpumask;
+	char cpumask_str[ODP_CPUMASK_STR_SIZE];
 	char str[max_len];
+
+	memset(cpumask_str, 0, sizeof(cpumask_str));
+
+	num_cpu = odp_cpumask_all_available(&cpumask);
+	odp_cpumask_to_str(&cpumask, cpumask_str, ODP_CPUMASK_STR_SIZE);
 
 	len = snprintf(str, max_len, "\n"
 		       "ODP system info\n"
 		       "---------------\n"
-		       "ODP API version: %s\n"
-		       "ODP impl name:   %s\n"
-		       "CPU model:       %s\n"
-		       "CPU freq (hz):   %" PRIu64 "\n"
-		       "Cache line size: %i\n"
-		       "CPU count:       %i\n"
+		       "ODP API version:  %s\n"
+		       "ODP impl name:    %s\n"
+		       "ODP impl details: %s\n"
+		       "CPU model:        %s\n"
+		       "CPU freq (hz):    %" PRIu64 "\n"
+		       "Cache line size:  %i\n"
+		       "CPU count:        %i\n"
+		       "CPU mask:         %s\n"
 		       "\n",
 		       odp_version_api_str(),
 		       odp_version_impl_name(),
+		       odp_version_impl_str(),
 		       odp_cpu_model_str(),
 		       odp_cpu_hz_max(),
 		       odp_sys_cache_line_size(),
-		       odp_cpu_count());
+		       num_cpu, cpumask_str);
 
 	str[len] = '\0';
 	ODP_PRINT("%s", str);

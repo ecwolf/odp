@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, Linaro Limited
+/* Copyright (c) 2014-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -6,7 +6,6 @@
 
 #include "config.h"
 
-#include <odp_internal.h>
 #include <odp/api/debug.h>
 #include <odp_debug_internal.h>
 #include <odp/api/hints.h>

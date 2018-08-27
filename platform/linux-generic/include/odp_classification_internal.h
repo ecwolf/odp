@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, Linaro Limited
+/* Copyright (c) 2014-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -39,7 +39,7 @@ selects destination queue and packet pool based on selected PMR and CoS.
 **/
 int cls_classify_packet(pktio_entry_t *entry, const uint8_t *base,
 			uint16_t pkt_len, uint32_t seg_len, odp_pool_t *pool,
-			odp_packet_hdr_t *pkt_hdr);
+			odp_packet_hdr_t *pkt_hdr, odp_bool_t parse);
 
 /**
 Packet IO classifier init
@@ -48,15 +48,6 @@ This function does initialization of classifier object associated with pktio.
 This function should be called during pktio initialization.
 **/
 int pktio_classifier_init(pktio_entry_t *pktio);
-
-/**
-@internal
-Flow Signature Calculation
-
-This function calculates the Flow Signature for a packet based on
-CoS and updates in Packet Meta Data
-**/
-int update_flow_signature(uint8_t *pkt_addr, cos_t *cos);
 
 #ifdef __cplusplus
 }

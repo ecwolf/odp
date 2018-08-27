@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, Linaro Limited
+/* Copyright (c) 2014-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:	BSD-3-Clause
@@ -8,7 +8,6 @@
 
 #include <odp_api.h>
 #include "odp_cunit_common.h"
-#include "buffer.h"
 
 #define BUF_ALIGN  ODP_CACHE_LINE_SIZE
 #define BUF_SIZE   1500
@@ -16,7 +15,7 @@
 static odp_pool_t raw_pool;
 static odp_buffer_t raw_buffer = ODP_BUFFER_INVALID;
 
-int buffer_suite_init(void)
+static int buffer_suite_init(void)
 {
 	odp_pool_param_t params;
 
@@ -35,7 +34,7 @@ int buffer_suite_init(void)
 	return 0;
 }
 
-int buffer_suite_term(void)
+static int buffer_suite_term(void)
 {
 	odp_buffer_free(raw_buffer);
 	if (odp_pool_destroy(raw_pool) != 0)
@@ -43,14 +42,15 @@ int buffer_suite_term(void)
 	return 0;
 }
 
-void buffer_test_pool_alloc(void)
+static void buffer_test_pool_alloc(void)
 {
 	odp_pool_t pool;
 	const int num = 3;
 	odp_buffer_t buffer[num];
 	odp_event_t ev;
 	int index;
-	char wrong_type = 0, wrong_size = 0, wrong_align = 0;
+	odp_bool_t wrong_type = false, wrong_subtype = false;
+	odp_bool_t wrong_size = false, wrong_align = false;
 	odp_pool_param_t params;
 
 	odp_pool_param_init(&params);
@@ -65,6 +65,7 @@ void buffer_test_pool_alloc(void)
 	/* Try to allocate num items from the pool */
 	for (index = 0; index < num; index++) {
 		uintptr_t addr;
+		odp_event_subtype_t subtype;
 
 		buffer[index] = odp_buffer_alloc(pool);
 
@@ -73,14 +74,20 @@ void buffer_test_pool_alloc(void)
 
 		ev = odp_buffer_to_event(buffer[index]);
 		if (odp_event_type(ev) != ODP_EVENT_BUFFER)
-			wrong_type = 1;
+			wrong_type = true;
+		if (odp_event_subtype(ev) != ODP_EVENT_NO_SUBTYPE)
+			wrong_subtype = true;
+		if (odp_event_types(ev, &subtype) != ODP_EVENT_BUFFER)
+			wrong_type = true;
+		if (subtype != ODP_EVENT_NO_SUBTYPE)
+			wrong_subtype = true;
 		if (odp_buffer_size(buffer[index]) < BUF_SIZE)
-			wrong_size = 1;
+			wrong_size = true;
 
 		addr = (uintptr_t)odp_buffer_addr(buffer[index]);
 
 		if ((addr % BUF_ALIGN) != 0)
-			wrong_align = 1;
+			wrong_align = true;
 
 		if (wrong_type || wrong_size || wrong_align)
 			odp_buffer_print(buffer[index]);
@@ -92,9 +99,10 @@ void buffer_test_pool_alloc(void)
 	index--;
 
 	/* Check that the pool had correct buffers */
-	CU_ASSERT(wrong_type == 0);
-	CU_ASSERT(wrong_size == 0);
-	CU_ASSERT(wrong_align == 0);
+	CU_ASSERT(!wrong_type);
+	CU_ASSERT(!wrong_subtype);
+	CU_ASSERT(!wrong_size);
+	CU_ASSERT(!wrong_align);
 
 	for (; index >= 0; index--)
 		odp_buffer_free(buffer[index]);
@@ -118,14 +126,15 @@ static int buffer_alloc_multi(odp_pool_t pool, odp_buffer_t buffer[], int num)
 	return total;
 }
 
-void buffer_test_pool_alloc_multi(void)
+static void buffer_test_pool_alloc_multi(void)
 {
 	odp_pool_t pool;
 	const int num = 3;
 	odp_buffer_t buffer[num + 1];
 	odp_event_t ev;
 	int index;
-	char wrong_type = 0, wrong_size = 0, wrong_align = 0;
+	odp_bool_t wrong_type = false, wrong_subtype = false;
+	odp_bool_t wrong_size = false, wrong_align = false;
 	odp_pool_param_t params;
 
 	odp_pool_param_init(&params);
@@ -142,20 +151,27 @@ void buffer_test_pool_alloc_multi(void)
 
 	for (index = 0; index < num; index++) {
 		uintptr_t addr;
+		odp_event_subtype_t subtype;
 
 		if (buffer[index] == ODP_BUFFER_INVALID)
 			break;
 
 		ev = odp_buffer_to_event(buffer[index]);
 		if (odp_event_type(ev) != ODP_EVENT_BUFFER)
-			wrong_type = 1;
+			wrong_type = true;
+		if (odp_event_subtype(ev) != ODP_EVENT_NO_SUBTYPE)
+			wrong_subtype = true;
+		if (odp_event_types(ev, &subtype) != ODP_EVENT_BUFFER)
+			wrong_type = true;
+		if (subtype != ODP_EVENT_NO_SUBTYPE)
+			wrong_subtype = true;
 		if (odp_buffer_size(buffer[index]) < BUF_SIZE)
-			wrong_size = 1;
+			wrong_size = true;
 
 		addr = (uintptr_t)odp_buffer_addr(buffer[index]);
 
 		if ((addr % BUF_ALIGN) != 0)
-			wrong_align = 1;
+			wrong_align = true;
 
 		if (wrong_type || wrong_size || wrong_align)
 			odp_buffer_print(buffer[index]);
@@ -165,16 +181,17 @@ void buffer_test_pool_alloc_multi(void)
 	CU_ASSERT(index == num);
 
 	/* Check that the pool had correct buffers */
-	CU_ASSERT(wrong_type == 0);
-	CU_ASSERT(wrong_size == 0);
-	CU_ASSERT(wrong_align == 0);
+	CU_ASSERT(!wrong_type);
+	CU_ASSERT(!wrong_subtype);
+	CU_ASSERT(!wrong_size);
+	CU_ASSERT(!wrong_align);
 
 	odp_buffer_free_multi(buffer, num);
 
 	CU_ASSERT(odp_pool_destroy(pool) == 0);
 }
 
-void buffer_test_pool_free(void)
+static void buffer_test_pool_free(void)
 {
 	odp_pool_t pool;
 	odp_buffer_t buffer;
@@ -205,7 +222,7 @@ void buffer_test_pool_free(void)
 	CU_ASSERT(odp_pool_destroy(pool) == 0);
 }
 
-void buffer_test_pool_free_multi(void)
+static void buffer_test_pool_free_multi(void)
 {
 	odp_pool_t pool[2];
 	odp_buffer_t buffer[4];
@@ -243,13 +260,17 @@ void buffer_test_pool_free_multi(void)
 	CU_ASSERT(odp_pool_destroy(pool[1]) == 0);
 }
 
-void buffer_test_management_basic(void)
+static void buffer_test_management_basic(void)
 {
 	odp_event_t ev = odp_buffer_to_event(raw_buffer);
+	odp_event_subtype_t subtype;
 
 	CU_ASSERT(odp_buffer_is_valid(raw_buffer) == 1);
 	CU_ASSERT(odp_buffer_pool(raw_buffer) != ODP_POOL_INVALID);
 	CU_ASSERT(odp_event_type(ev) == ODP_EVENT_BUFFER);
+	CU_ASSERT(odp_event_subtype(ev) == ODP_EVENT_NO_SUBTYPE);
+	CU_ASSERT(odp_event_types(ev, &subtype) == ODP_EVENT_BUFFER);
+	CU_ASSERT(subtype == ODP_EVENT_NO_SUBTYPE);
 	CU_ASSERT(odp_buffer_size(raw_buffer) >= BUF_SIZE);
 	CU_ASSERT(odp_buffer_addr(raw_buffer) != NULL);
 	odp_buffer_print(raw_buffer);
@@ -272,7 +293,7 @@ odp_suiteinfo_t buffer_suites[] = {
 	ODP_SUITE_INFO_NULL,
 };
 
-int buffer_main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
 	int ret;
 

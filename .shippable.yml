@@ -5,9 +5,8 @@ compiler:
   - clang
 
 env:
-  matrix:
-    - CONF=""
-    # - CONF="--disable-abi-compat"
+    - CONF="--disable-test-perf --disable-test-perf-proc"
+    - CONF="--disable-abi-compat --disable-test-perf --disable-test-perf-proc"
     # - CONF="--enable-schedule-sp"
     # - CONF="--enable-schedule-iquery"
     # - CONF="--enable-dpdk-zero-copy"
@@ -15,8 +14,6 @@ env:
     # - CROSS_ARCH="armhf" CFLAGS="-march=armv7-a"
     # - CROSS_ARCH="powerpc"
     # - CROSS_ARCH="i386"
-  global:
-    # - PLACEHOLDER=""
 
 build:
   pre_ci:
@@ -31,15 +28,24 @@ build:
     options:
 
   ci:
-    - echo 1000 | sudo tee /proc/sys/vm/nr_hugepages
-    - sudo mkdir -p /mnt/huge
-    - sudo mount -t hugetlbfs nodev /mnt/huge
-    - mkdir -p /dev/shm/odp
+    - mkdir -p $HOME/odp-shmdir
+    - export CI=true ODP_SHM_DIR=$HOME/odp-shmdir ODP_TEST_OUT_XML=yes
     - ./bootstrap
-    - ./configure --disable-test-perf
-    - make
-    - sudo env ODP_SHM_DIR=/dev/shm/odp make check
+    - if [ "${CC#clang}" != "${CC}" ] ; then export CXX="${CC/clang/clang++}"; fi
+    - echo ./configure $CONF
+    - ./configure $CONF
+    - make -j $(nproc)
+    - ODP_SCHEDULER=basic make check
+    - ./scripts/shippable-post.sh basic
+    - ODP_SCHEDULER=sp make check
+    - ./scripts/shippable-post.sh sp
+    - ODP_SCHEDULER=iquery make check
+    - ./scripts/shippable-post.sh iquery
+    - ODP_SCHEDULER=scalable make check
+    - ./scripts/shippable-post.sh scalable
+    - rm -rf $HOME/odp-shmdir
 
   on_failure:
+    - ./scripts/shippable-post.sh
     - cat config.log
     - find . -name "*.trs" | xargs grep -l '^.test-result. FAIL' | while read trs ; do echo FAILURE detected at $trs; cat ${trs%%.trs}.log ; done

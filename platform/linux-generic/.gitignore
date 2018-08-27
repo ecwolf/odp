@@ -1,2 +1,2 @@
-include/odp/api/plat/static_inline.h
 libodp-linux.pc
+odp_libconfig_config.h

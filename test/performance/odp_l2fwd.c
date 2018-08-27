@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, Linaro Limited
+/* Copyright (c) 2014-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -6,13 +6,7 @@
 
 #include "config.h"
 
-/**
- * @file
- *
- * @example odp_l2fwd.c  ODP basic forwarding application
- */
-
-/** enable strtok */
+/* enable strtok */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -30,38 +24,28 @@
 #include <odp_api.h>
 #include <odp/helper/odph_api.h>
 
-/** @def MAX_WORKERS
- * @brief Maximum number of worker threads
- */
-#define MAX_WORKERS            32
+/* Maximum number of worker threads */
+#define MAX_WORKERS            (ODP_THREAD_COUNT_MAX - 1)
 
-/** @def SHM_PKT_POOL_SIZE
- * @brief Size of the shared memory block
- */
-#define SHM_PKT_POOL_SIZE      8192
+/* Size of the shared memory block */
+#define POOL_PKT_NUM           (16 * 1024)
 
-/** @def SHM_PKT_POOL_BUF_SIZE
- * @brief Buffer size of the packet pool buffer
- */
-#define SHM_PKT_POOL_BUF_SIZE  1856
+/* Buffer size of the packet pool buffer */
+#define POOL_PKT_LEN           1536
 
-/** @def MAX_PKT_BURST
- * @brief Maximum number of packet in a burst
- */
+/* Maximum number of packet in a burst */
 #define MAX_PKT_BURST          32
 
-/** Maximum number of pktio queues per interface */
+/* Maximum number of pktio queues per interface */
 #define MAX_QUEUES             32
 
-/** Maximum number of pktio interfaces */
+/* Maximum number of pktio interfaces */
 #define MAX_PKTIOS             8
 
-/** Maximum pktio index table size */
+/* Maximum pktio index table size */
 #define MAX_PKTIO_INDEXES      1024
 
-/**
- * Packet input mode
- */
+/* Packet input mode */
 typedef enum pktin_mode_t {
 	DIRECT_RECV,
 	PLAIN_QUEUE,
@@ -70,9 +54,7 @@ typedef enum pktin_mode_t {
 	SCHED_ORDERED,
 } pktin_mode_t;
 
-/**
- * Packet output modes
- */
+/* Packet output modes */
 typedef enum pktout_mode_t {
 	PKTOUT_DIRECT,
 	PKTOUT_QUEUE
@@ -85,61 +67,58 @@ static inline int sched_mode(pktin_mode_t in_mode)
 	       (in_mode == SCHED_ORDERED);
 }
 
-/** Get rid of path in filename - only for unix-type paths using '/' */
+/* Get rid of path in filename - only for unix-type paths using '/' */
 #define NO_PATH(file_name) (strrchr((file_name), '/') ? \
 			    strrchr((file_name), '/') + 1 : (file_name))
-/**
+/*
  * Parsed command line application arguments
  */
 typedef struct {
-	int cpu_count;
-	int if_count;		/**< Number of interfaces to be used */
-	int addr_count;		/**< Number of dst addresses to be used */
-	int num_workers;	/**< Number of worker threads */
-	char **if_names;	/**< Array of pointers to interface names */
-	odph_ethaddr_t addrs[MAX_PKTIOS]; /**< Array of dst addresses */
-	pktin_mode_t in_mode;	/**< Packet input mode */
-	pktout_mode_t out_mode; /**< Packet output mode */
-	int time;		/**< Time in seconds to run. */
-	int accuracy;		/**< Number of seconds to get and print statistics */
-	char *if_str;		/**< Storage for interface names */
-	int dst_change;		/**< Change destination eth addresses */
-	int src_change;		/**< Change source eth addresses */
-	int error_check;        /**< Check packet errors */
-	int sched_mode;         /**< Scheduler mode */
-	int num_groups;         /**< Number of scheduling groups */
+	int extra_check;        /* Some extra checks have been enabled */
+	unsigned int cpu_count;
+	int if_count;		/* Number of interfaces to be used */
+	int addr_count;		/* Number of dst addresses to be used */
+	int num_workers;	/* Number of worker threads */
+	char **if_names;	/* Array of pointers to interface names */
+	odph_ethaddr_t addrs[MAX_PKTIOS]; /* Array of dst addresses */
+	pktin_mode_t in_mode;	/* Packet input mode */
+	pktout_mode_t out_mode; /* Packet output mode */
+	int time;		/* Time in seconds to run. */
+	int accuracy;		/* Number of seconds to get and print stats */
+	char *if_str;		/* Storage for interface names */
+	int dst_change;		/* Change destination eth addresses */
+	int src_change;		/* Change source eth addresses */
+	int error_check;        /* Check packet errors */
+	int chksum;             /* Checksum offload */
+	int sched_mode;         /* Scheduler mode */
+	int num_groups;         /* Number of scheduling groups */
+	int verbose;		/* Verbose output */
 } appl_args_t;
 
-static int exit_threads;	/**< Break workers loop if set to 1 */
+static int exit_threads;	/* Break workers loop if set to 1 */
 
 static void sig_handler(int signo ODP_UNUSED)
 {
 	exit_threads = 1;
 }
 
-/**
- * Statistics
- */
-typedef union {
+/* Statistics */
+typedef union ODP_ALIGNED_CACHE {
 	struct {
-		/** Number of forwarded packets */
+		/* Number of forwarded packets */
 		uint64_t packets;
-		/** Packets dropped due to receive error */
+		/* Packets dropped due to receive error */
 		uint64_t rx_drops;
-		/** Packets dropped due to transmit error */
+		/* Packets dropped due to transmit error */
 		uint64_t tx_drops;
 	} s;
 
 	uint8_t padding[ODP_CACHE_LINE_SIZE];
-} stats_t ODP_ALIGNED_CACHE;
+} stats_t;
 
-/**
- * Thread specific arguments
- */
+/* Thread specific data */
 typedef struct thread_args_t {
-	int thr_idx;
-	int num_pktio;
-	int num_groups;
+	stats_t stats;
 
 	struct {
 		odp_pktin_queue_t pktin;
@@ -155,31 +134,29 @@ typedef struct thread_args_t {
 	/* Groups to join */
 	odp_schedule_group_t group[MAX_PKTIOS];
 
-	/* Pointer to per thread stats */
-	stats_t *stats;
-
+	int thr_idx;
+	int num_pktio;
+	int num_groups;
 } thread_args_t;
 
-/**
+/*
  * Grouping of all global data
  */
 typedef struct {
-	/** Barriers to synchronize main and workers */
+	/* Thread specific arguments */
+	thread_args_t thread[MAX_WORKERS];
+	/* Barriers to synchronize main and workers */
 	odp_barrier_t init_barrier;
 	odp_barrier_t term_barrier;
-	/** Per thread packet stats */
-	stats_t stats[MAX_WORKERS];
-	/** Application (parsed) arguments */
+	/* Application (parsed) arguments */
 	appl_args_t appl;
-	/** Thread specific arguments */
-	thread_args_t thread[MAX_WORKERS];
-	/** Table of port ethernet addresses */
+	/* Table of port ethernet addresses */
 	odph_ethaddr_t port_eth_addr[MAX_PKTIOS];
-	/** Table of dst ethernet addresses */
+	/* Table of dst ethernet addresses */
 	odph_ethaddr_t dst_eth_addr[MAX_PKTIOS];
-	/** Table of dst ports. This is used by non-sched modes. */
+	/* Table of dst ports. This is used by non-sched modes. */
 	int dst_port[MAX_PKTIOS];
-	/** Table of pktio handles */
+	/* Table of pktio handles */
 	struct {
 		odp_pktio_t pktio;
 		odp_pktin_queue_t pktin[MAX_QUEUES];
@@ -194,26 +171,26 @@ typedef struct {
 		int next_tx_queue;
 	} pktios[MAX_PKTIOS];
 
-	/** Destination port lookup table.
-	 *  Table index is pktio_index of the API. This is used by the sched
-	 *  mode. */
+	/* Destination port lookup table.
+	 * Table index is pktio_index of the API. This is used by the sched
+	 * mode. */
 	uint8_t dst_port_from_idx[MAX_PKTIO_INDEXES];
 
 } args_t;
 
-/** Global pointer to args */
+/* Global pointer to args */
 static args_t *gbl_args;
 
-/**
+/*
  * Drop packets which input parsing marked as containing errors.
  *
  * Frees packets with error and modifies pkt_tbl[] to only contain packets with
  * no detected errors.
  *
- * @param pkt_tbl  Array of packets
- * @param num      Number of packets in pkt_tbl[]
+ * pkt_tbl  Array of packets
+ * num      Number of packets in pkt_tbl[]
  *
- * @return Number of packets dropped
+ * Returns number of packets dropped
  */
 static inline int drop_err_pkts(odp_packet_t pkt_tbl[], unsigned num)
 {
@@ -235,12 +212,12 @@ static inline int drop_err_pkts(odp_packet_t pkt_tbl[], unsigned num)
 	return dropped;
 }
 
-/**
+/*
  * Fill packets' eth addresses according to the destination port
  *
- * @param pkt_tbl  Array of packets
- * @param num      Number of packets in the array
- * @param dst_port Destination port
+ * pkt_tbl  Array of packets
+ * num      Number of packets in the array
+ * dst_port Destination port
  */
 static inline void fill_eth_addrs(odp_packet_t pkt_tbl[],
 				  unsigned num, int dst_port)
@@ -271,12 +248,10 @@ static inline int event_queue_send(odp_queue_t queue, odp_packet_t *pkt_tbl,
 				   unsigned pkts)
 {
 	int ret;
-	unsigned i;
 	unsigned sent = 0;
 	odp_event_t ev_tbl[pkts];
 
-	for (i = 0; i < pkts; i++)
-		ev_tbl[i] = odp_packet_to_event(pkt_tbl[i]);
+	odp_packet_to_event_multi(pkt_tbl, ev_tbl, pkts);
 
 	while (sent < pkts) {
 		ret = odp_queue_enq_multi(queue, &ev_tbl[sent], pkts - sent);
@@ -292,10 +267,22 @@ static inline int event_queue_send(odp_queue_t queue, odp_packet_t *pkt_tbl,
 	return sent;
 }
 
-/**
+static inline void chksum_insert(odp_packet_t *pkt_tbl, int pkts)
+{
+	odp_packet_t pkt;
+	int i;
+
+	for (i = 0; i < pkts; i++) {
+		pkt = pkt_tbl[i];
+		odp_packet_l3_chksum_insert(pkt, 1);
+		odp_packet_l4_chksum_insert(pkt, 1);
+	}
+}
+
+/*
  * Packet IO worker thread using scheduled queues
  *
- * @param arg  thread arguments of type 'thread_args_t *'
+ * arg  thread arguments of type 'thread_args_t *'
  */
 static int run_worker_sched_mode(void *arg)
 {
@@ -307,7 +294,7 @@ static int run_worker_sched_mode(void *arg)
 	odp_pktout_queue_t pktout[MAX_PKTIOS];
 	odp_queue_t tx_queue[MAX_PKTIOS];
 	thread_args_t *thr_args = arg;
-	stats_t *stats = thr_args->stats;
+	stats_t *stats = &thr_args->stats;
 	int use_event_queue = gbl_args->appl.out_mode;
 	pktin_mode_t in_mode = gbl_args->appl.in_mode;
 
@@ -362,21 +349,25 @@ static int run_worker_sched_mode(void *arg)
 		if (pkts <= 0)
 			continue;
 
-		for (i = 0; i < pkts; i++)
-			pkt_tbl[i] = odp_packet_from_event(ev_tbl[i]);
+		odp_packet_from_event_multi(pkt_tbl, ev_tbl, pkts);
 
-		if (gbl_args->appl.error_check) {
-			int rx_drops;
+		if (odp_unlikely(gbl_args->appl.extra_check)) {
+			if (gbl_args->appl.chksum)
+				chksum_insert(pkt_tbl, pkts);
 
-			/* Drop packets with errors */
-			rx_drops = drop_err_pkts(pkt_tbl, pkts);
+			if (gbl_args->appl.error_check) {
+				int rx_drops;
 
-			if (odp_unlikely(rx_drops)) {
-				stats->s.rx_drops += rx_drops;
-				if (pkts == rx_drops)
-					continue;
+				/* Drop packets with errors */
+				rx_drops = drop_err_pkts(pkt_tbl, pkts);
 
-				pkts -= rx_drops;
+				if (odp_unlikely(rx_drops)) {
+					stats->s.rx_drops += rx_drops;
+					if (pkts == rx_drops)
+						continue;
+
+					pkts -= rx_drops;
+				}
 			}
 		}
 
@@ -428,10 +419,10 @@ static int run_worker_sched_mode(void *arg)
 	return 0;
 }
 
-/**
+/*
  * Packet IO worker thread using plain queues
  *
- * @param arg  thread arguments of type 'thread_args_t *'
+ * arg  thread arguments of type 'thread_args_t *'
  */
 static int run_worker_plain_queue_mode(void *arg)
 {
@@ -444,7 +435,7 @@ static int run_worker_plain_queue_mode(void *arg)
 	odp_queue_t tx_queue;
 	int pktio = 0;
 	thread_args_t *thr_args = arg;
-	stats_t *stats = thr_args->stats;
+	stats_t *stats = &thr_args->stats;
 	int use_event_queue = gbl_args->appl.out_mode;
 	int i;
 
@@ -483,21 +474,25 @@ static int run_worker_plain_queue_mode(void *arg)
 		if (odp_unlikely(pkts <= 0))
 			continue;
 
-		for (i = 0; i < pkts; i++)
-			pkt_tbl[i] = odp_packet_from_event(event[i]);
+		odp_packet_from_event_multi(pkt_tbl, event, pkts);
 
-		if (gbl_args->appl.error_check) {
-			int rx_drops;
+		if (odp_unlikely(gbl_args->appl.extra_check)) {
+			if (gbl_args->appl.chksum)
+				chksum_insert(pkt_tbl, pkts);
 
-			/* Drop packets with errors */
-			rx_drops = drop_err_pkts(pkt_tbl, pkts);
+			if (gbl_args->appl.error_check) {
+				int rx_drops;
 
-			if (odp_unlikely(rx_drops)) {
-				stats->s.rx_drops += rx_drops;
-				if (pkts == rx_drops)
-					continue;
+				/* Drop packets with errors */
+				rx_drops = drop_err_pkts(pkt_tbl, pkts);
 
-				pkts -= rx_drops;
+				if (odp_unlikely(rx_drops)) {
+					stats->s.rx_drops += rx_drops;
+					if (pkts == rx_drops)
+						continue;
+
+					pkts -= rx_drops;
+				}
 			}
 		}
 
@@ -551,10 +546,10 @@ static int run_worker_plain_queue_mode(void *arg)
 	return 0;
 }
 
-/**
+/*
  * Packet IO worker thread accessing IO resources directly
  *
- * @param arg  thread arguments of type 'thread_args_t *'
+ * arg  thread arguments of type 'thread_args_t *'
  */
 static int run_worker_direct_mode(void *arg)
 {
@@ -567,7 +562,7 @@ static int run_worker_direct_mode(void *arg)
 	odp_queue_t tx_queue;
 	int pktio = 0;
 	thread_args_t *thr_args = arg;
-	stats_t *stats = thr_args->stats;
+	stats_t *stats = &thr_args->stats;
 	int use_event_queue = gbl_args->appl.out_mode;
 
 	thr = odp_thread_id();
@@ -604,18 +599,23 @@ static int run_worker_direct_mode(void *arg)
 		if (odp_unlikely(pkts <= 0))
 			continue;
 
-		if (gbl_args->appl.error_check) {
-			int rx_drops;
+		if (odp_unlikely(gbl_args->appl.extra_check)) {
+			if (gbl_args->appl.chksum)
+				chksum_insert(pkt_tbl, pkts);
 
-			/* Drop packets with errors */
-			rx_drops = drop_err_pkts(pkt_tbl, pkts);
+			if (gbl_args->appl.error_check) {
+				int rx_drops;
 
-			if (odp_unlikely(rx_drops)) {
-				stats->s.rx_drops += rx_drops;
-				if (pkts == rx_drops)
-					continue;
+				/* Drop packets with errors */
+				rx_drops = drop_err_pkts(pkt_tbl, pkts);
 
-				pkts -= rx_drops;
+				if (odp_unlikely(rx_drops)) {
+					stats->s.rx_drops += rx_drops;
+					if (pkts == rx_drops)
+						continue;
+
+					pkts -= rx_drops;
+				}
 			}
 		}
 
@@ -648,15 +648,14 @@ static int run_worker_direct_mode(void *arg)
 	return 0;
 }
 
-/**
+/*
  * Create a pktio handle, optionally associating a default input queue.
  *
- * @param dev   Name of device to open
- * @param index Pktio index
- * @param pool  Pool to associate with device for packet RX/TX
+ * dev   Name of device to open
+ * index Pktio index
+ * pool  Pool to associate with device for packet RX/TX
  *
- * @retval 0 on success
- * @retval -1 on failure
+ * Returns 0 on success, -1 on failure
  */
 static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 			odp_pool_t pool, odp_schedule_group_t group)
@@ -664,7 +663,7 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 	odp_pktio_t pktio;
 	odp_pktio_param_t pktio_param;
 	odp_schedule_sync_t  sync_mode;
-	odp_pktio_capability_t capa;
+	odp_pktio_capability_t pktio_capa;
 	odp_pktio_config_t config;
 	odp_pktin_queue_param_t pktin_param;
 	odp_pktout_queue_param_t pktout_param;
@@ -697,15 +696,26 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 	printf("created pktio %" PRIu64 ", dev: %s, drv: %s\n",
 	       odp_pktio_to_u64(pktio), dev, info.drv_name);
 
-	if (odp_pktio_capability(pktio, &capa)) {
-		LOG_ERR("Error: capability query failed %s\n", dev);
+	if (gbl_args->appl.verbose)
+		odp_pktio_print(pktio);
+
+	if (odp_pktio_capability(pktio, &pktio_capa)) {
+		LOG_ERR("Error: pktio capability query failed %s\n", dev);
 		return -1;
 	}
 
 	odp_pktio_config_init(&config);
-	config.parser.layer = gbl_args->appl.error_check ?
-			ODP_PKTIO_PARSER_LAYER_ALL :
-			ODP_PKTIO_PARSER_LAYER_NONE;
+	config.parser.layer = gbl_args->appl.extra_check ?
+			ODP_PROTO_LAYER_ALL :
+			ODP_PROTO_LAYER_NONE;
+
+	if (gbl_args->appl.chksum) {
+		printf("Checksum offload enabled\n");
+		config.pktout.bit.ipv4_chksum_ena = 1;
+		config.pktout.bit.udp_chksum_ena  = 1;
+		config.pktout.bit.tcp_chksum_ena  = 1;
+	}
+
 	odp_pktio_config(pktio, &config);
 
 	odp_pktin_queue_param_init(&pktin_param);
@@ -729,17 +739,17 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 		pktin_param.queue_param.sched.group = group;
 	}
 
-	if (num_rx > (int)capa.max_input_queues) {
+	if (num_rx > (int)pktio_capa.max_input_queues) {
 		printf("Sharing %i input queues between %i workers\n",
-		       capa.max_input_queues, num_rx);
-		num_rx  = capa.max_input_queues;
+		       pktio_capa.max_input_queues, num_rx);
+		num_rx  = pktio_capa.max_input_queues;
 		mode_rx = ODP_PKTIO_OP_MT;
 	}
 
-	if (num_tx > (int)capa.max_output_queues) {
+	if (num_tx > (int)pktio_capa.max_output_queues) {
 		printf("Sharing %i output queues between %i workers\n",
-		       capa.max_output_queues, num_tx);
-		num_tx  = capa.max_output_queues;
+		       pktio_capa.max_output_queues, num_tx);
+		num_tx  = pktio_capa.max_output_queues;
 		mode_tx = ODP_PKTIO_OP_MT;
 	}
 
@@ -804,16 +814,15 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 	return 0;
 }
 
-/**
- *  Print statistics
+/*
+ * Print statistics
  *
- * @param num_workers Number of worker threads
- * @param thr_stats Pointer to stats storage
- * @param duration Number of seconds to loop in
- * @param timeout Number of seconds for stats calculation
- *
+ * num_workers Number of worker threads
+ * thr_stats   Pointers to stats storage
+ * duration    Number of seconds to loop in
+ * timeout     Number of seconds for stats calculation
  */
-static int print_speed_stats(int num_workers, stats_t *thr_stats,
+static int print_speed_stats(int num_workers, stats_t **thr_stats,
 			     int duration, int timeout)
 {
 	uint64_t pkts = 0;
@@ -841,9 +850,9 @@ static int print_speed_stats(int num_workers, stats_t *thr_stats,
 		sleep(timeout);
 
 		for (i = 0; i < num_workers; i++) {
-			pkts += thr_stats[i].s.packets;
-			rx_drops += thr_stats[i].s.rx_drops;
-			tx_drops += thr_stats[i].s.tx_drops;
+			pkts += thr_stats[i]->s.packets;
+			rx_drops += thr_stats[i]->s.rx_drops;
+			tx_drops += thr_stats[i]->s.tx_drops;
 		}
 		if (stats_enabled) {
 			pps = (pkts - pkts_prev) / timeout;
@@ -893,10 +902,10 @@ static void print_port_mapping(void)
 	printf("\n");
 }
 
-/**
+/*
  * Find the destination port for a given input port
  *
- * @param port  Input port index
+ * port  Input port index
  */
 static int find_dest_port(int port)
 {
@@ -1084,7 +1093,7 @@ static void init_port_lookup_tbl(void)
 	}
 }
 
-/**
+/*
  * Prinf usage information
  */
 static void usage(char *progname)
@@ -1116,7 +1125,7 @@ static void usage(char *progname)
 	       "  -o, --out_mode <arg>    Packet output mode\n"
 	       "                          0: Direct mode: PKTOUT_MODE_DIRECT (default)\n"
 	       "                          1: Queue mode:  PKTOUT_MODE_QUEUE\n"
-	       "  -c, --count <num>       CPU count.\n"
+	       "  -c, --count <num>       CPU count, 0=all available, default=1\n"
 	       "  -t, --time <sec>        Time in seconds to run.\n"
 	       "  -a, --accuracy <sec>    Time in seconds get print statistics\n"
 	       "                          (default is 1 second).\n"
@@ -1128,20 +1137,23 @@ static void usage(char *progname)
 	       "                          Requires also the -d flag to be set\n"
 	       "  -e, --error_check <arg> 0: Don't check packet errors (default)\n"
 	       "                          1: Check packet errors\n"
+	       "  -k, --chksum <arg>      0: Don't use checksum offload (default)\n"
+	       "                          1: Use checksum offload\n"
 	       "  -g, --groups <num>      Number of groups to use: 0 ... num\n"
 	       "                          0: SCHED_GROUP_ALL (default)\n"
 	       "                          num: must not exceed number of interfaces or workers\n"
+	       "  -v, --verbose           Verbose output.\n"
 	       "  -h, --help              Display help and exit.\n\n"
 	       "\n", NO_PATH(progname), NO_PATH(progname), MAX_PKTIOS
 	    );
 }
 
-/**
+/*
  * Parse and store the command line arguments
  *
- * @param argc       argument count
- * @param argv[]     argument vector
- * @param appl_args  Store application arguments here
+ * argc       argument count
+ * argv[]     argument vector
+ * appl_args  Store application arguments here
  */
 static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 {
@@ -1162,24 +1174,27 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		{"dst_change", required_argument, NULL, 'd'},
 		{"src_change", required_argument, NULL, 's'},
 		{"error_check", required_argument, NULL, 'e'},
+		{"chksum", required_argument, NULL, 'k'},
 		{"groups", required_argument, NULL, 'g'},
+		{"verbose", no_argument, NULL, 'v'},
 		{"help", no_argument, NULL, 'h'},
 		{NULL, 0, NULL, 0}
 	};
 
-	static const char *shortopts =  "+c:+t:+a:i:m:o:r:d:s:e:g:h";
+	static const char *shortopts =  "+c:+t:+a:i:m:o:r:d:s:e:k:g:vh";
 
 	/* let helper collect its own arguments (e.g. --odph_proc) */
-	odph_parse_options(argc, argv, shortopts, longopts);
+	argc = odph_parse_options(argc, argv);
 
 	appl_args->time = 0; /* loop forever if time to run is 0 */
 	appl_args->accuracy = 1; /* get and print pps stats second */
+	appl_args->cpu_count = 1; /* use one worker by default */
 	appl_args->dst_change = 1; /* change eth dst address by default */
 	appl_args->src_change = 1; /* change eth src address by default */
 	appl_args->num_groups = 0; /* use default group */
 	appl_args->error_check = 0; /* don't check packet errors by default */
-
-	opterr = 0; /* do not issue errors on helper options */
+	appl_args->verbose = 0;
+	appl_args->chksum = 0; /* don't use checksum offload by default */
 
 	while (1) {
 		opt = getopt_long(argc, argv, shortopts, longopts, &long_index);
@@ -1302,8 +1317,14 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		case 'e':
 			appl_args->error_check = atoi(optarg);
 			break;
+		case 'k':
+			appl_args->chksum = atoi(optarg);
+			break;
 		case 'g':
 			appl_args->num_groups = atoi(optarg);
+			break;
+		case 'v':
+			appl_args->verbose = 1;
 			break;
 		case 'h':
 			usage(argv[0]);
@@ -1326,10 +1347,12 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		exit(EXIT_FAILURE);
 	}
 
+	appl_args->extra_check = appl_args->error_check || appl_args->chksum;
+
 	optind = 1;		/* reset 'extern optind' from the getopt lib */
 }
 
-/**
+/*
  * Print system and application info
  */
 static void print_info(char *progname, appl_args_t *appl_args)
@@ -1399,8 +1422,8 @@ static void create_groups(int num, odp_schedule_group_t *group)
 	}
 }
 
-/**
- * ODP L2 forwarding main function
+/*
+ * L2 forwarding main function
  */
 int main(int argc, char *argv[])
 {
@@ -1415,19 +1438,31 @@ int main(int argc, char *argv[])
 	odph_ethaddr_t new_addr;
 	odp_pool_param_t params;
 	int ret;
-	stats_t *stats;
+	stats_t *stats[MAX_WORKERS];
 	int if_count;
 	int (*thr_run_func)(void *);
 	odp_instance_t instance;
 	int num_groups;
 	odp_schedule_group_t group[MAX_PKTIOS];
+	odp_init_t init;
+	odp_pool_capability_t pool_capa;
+	uint32_t pkt_len, pkt_num;
+
+	odp_init_param_init(&init);
+
+	/* List features not to be used (may optimize performance) */
+	init.not_used.feat.cls    = 1;
+	init.not_used.feat.crypto = 1;
+	init.not_used.feat.ipsec  = 1;
+	init.not_used.feat.timer  = 1;
+	init.not_used.feat.tm     = 1;
 
 	/* Signal handler has to be registered before global init in case ODP
 	 * implementation creates internal threads/processes. */
 	signal(SIGINT, sig_handler);
 
 	/* Init ODP before calling anything else */
-	if (odp_init_global(&instance, NULL, NULL)) {
+	if (odp_init_global(&instance, &init, NULL)) {
 		LOG_ERR("Error: ODP global init failed.\n");
 		exit(EXIT_FAILURE);
 	}
@@ -1458,9 +1493,8 @@ int main(int argc, char *argv[])
 	/* Print both system and application information */
 	print_info(NO_PATH(argv[0]), &gbl_args->appl);
 
-	/* Default to system CPU count unless user specified */
 	num_workers = MAX_WORKERS;
-	if (gbl_args->appl.cpu_count)
+	if (gbl_args->appl.cpu_count && gbl_args->appl.cpu_count < MAX_WORKERS)
 		num_workers = gbl_args->appl.cpu_count;
 
 	/* Get default worker cpumask */
@@ -1491,11 +1525,25 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
+	if (odp_pool_capability(&pool_capa)) {
+		LOG_ERR("Error: pool capability failed\n");
+		return -1;
+	}
+
+	pkt_len = POOL_PKT_LEN;
+	pkt_num = POOL_PKT_NUM;
+
+	if (pool_capa.pkt.max_len && pkt_len > pool_capa.pkt.max_len)
+		pkt_len = pool_capa.pkt.max_len;
+
+	if (pool_capa.pkt.max_num && pkt_num > pool_capa.pkt.max_num)
+		pkt_num = pool_capa.pkt.max_num;
+
 	/* Create packet pool */
 	odp_pool_param_init(&params);
-	params.pkt.seg_len = SHM_PKT_POOL_BUF_SIZE;
-	params.pkt.len     = SHM_PKT_POOL_BUF_SIZE;
-	params.pkt.num     = SHM_PKT_POOL_SIZE;
+	params.pkt.seg_len = pkt_len;
+	params.pkt.len     = pkt_len;
+	params.pkt.num     = pkt_num;
 	params.type        = ODP_POOL_PACKET;
 
 	pool = odp_pool_create("packet pool", &params);
@@ -1575,8 +1623,6 @@ int main(int argc, char *argv[])
 
 	memset(thread_tbl, 0, sizeof(thread_tbl));
 
-	stats = gbl_args->stats;
-
 	odp_barrier_init(&gbl_args->init_barrier, num_workers + 1);
 	odp_barrier_init(&gbl_args->term_barrier, num_workers + 1);
 
@@ -1603,7 +1649,7 @@ int main(int argc, char *argv[])
 		gbl_args->thread[i].num_groups = 1;
 		gbl_args->thread[i].group[0] = group[i % num_groups];
 
-		gbl_args->thread[i].stats = &stats[i];
+		stats[i] = &gbl_args->thread[i].stats;
 
 		odp_cpumask_zero(&thd_mask);
 		odp_cpumask_set(&thd_mask, cpu);

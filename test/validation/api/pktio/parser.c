@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, Linaro Limited
+/* Copyright (c) 2017-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -8,12 +8,12 @@
 
 #include <odp_api.h>
 #include <odp_cunit_common.h>
+#include <test_packet_parser.h>
 
 #include <odp/helper/odph_api.h>
 
 #include <stdlib.h>
 #include "parser.h"
-#include "pktio.h"
 
 #define MAX_NUM_IFACES         2
 #define PKT_POOL_NUM           256
@@ -121,7 +121,7 @@ static odp_pktio_t create_pktio(int iface_idx, odp_pool_t pool)
 	}
 
 	odp_pktio_config_init(&config);
-	config.parser.layer = ODP_PKTIO_PARSER_LAYER_ALL;
+	config.parser.layer = ODP_PROTO_LAYER_ALL;
 	if (odp_pktio_config(pktio, &config)) {
 		printf("Error:  failed to configure %s\n", iface);
 		return ODP_PKTIO_INVALID;
@@ -207,6 +207,21 @@ static odp_packet_t recv_and_cmp_packet(odp_pktin_queue_t pktin,
 	return pkt;
 }
 
+static void pktio_pkt_set_macs(odp_packet_t pkt, odp_pktio_t src, odp_pktio_t dst)
+{
+	uint32_t len;
+	odph_ethhdr_t *eth = (odph_ethhdr_t *)odp_packet_l2_ptr(pkt, &len);
+	int ret;
+
+	ret = odp_pktio_mac_addr(src, &eth->src, ODP_PKTIO_MACADDR_MAXSIZE);
+	CU_ASSERT(ret == ODPH_ETHADDR_LEN);
+	CU_ASSERT(ret <= ODP_PKTIO_MACADDR_MAXSIZE);
+
+	ret = odp_pktio_mac_addr(dst, &eth->dst, ODP_PKTIO_MACADDR_MAXSIZE);
+	CU_ASSERT(ret == ODPH_ETHADDR_LEN);
+	CU_ASSERT(ret <= ODP_PKTIO_MACADDR_MAXSIZE);
+}
+
 /**
  * Creates a test packet from data array and loops it through the test pktio
  * interfaces forcing packet parsing.
@@ -256,7 +271,7 @@ static odp_packet_t loopback_packet(pktio_info_t *pktio_a,
 	return pkt;
 }
 
-void parser_test_arp(void)
+static void parser_test_arp(void)
 {
 	odp_packet_t pkt;
 
@@ -272,7 +287,7 @@ void parser_test_arp(void)
 	odp_packet_free(pkt);
 }
 
-void parser_test_ipv4_icmp(void)
+static void parser_test_ipv4_icmp(void)
 {
 	odp_packet_t pkt;
 
@@ -286,11 +301,12 @@ void parser_test_ipv4_icmp(void)
 	CU_ASSERT(!odp_packet_has_ipv6(pkt));
 	CU_ASSERT(!odp_packet_has_tcp(pkt));
 	CU_ASSERT(!odp_packet_has_udp(pkt));
+	CU_ASSERT(!odp_packet_has_sctp(pkt));
 
 	odp_packet_free(pkt);
 }
 
-void parser_test_ipv4_tcp(void)
+static void parser_test_ipv4_tcp(void)
 {
 	odp_packet_t pkt;
 
@@ -303,11 +319,12 @@ void parser_test_ipv4_tcp(void)
 
 	CU_ASSERT(!odp_packet_has_ipv6(pkt));
 	CU_ASSERT(!odp_packet_has_udp(pkt));
+	CU_ASSERT(!odp_packet_has_sctp(pkt));
 
 	odp_packet_free(pkt);
 }
 
-void parser_test_ipv4_udp(void)
+static void parser_test_ipv4_udp(void)
 {
 	odp_packet_t pkt;
 
@@ -320,11 +337,12 @@ void parser_test_ipv4_udp(void)
 
 	CU_ASSERT(!odp_packet_has_ipv6(pkt));
 	CU_ASSERT(!odp_packet_has_tcp(pkt));
+	CU_ASSERT(!odp_packet_has_sctp(pkt));
 
 	odp_packet_free(pkt);
 }
 
-void parser_test_vlan_ipv4_udp(void)
+static void parser_test_vlan_ipv4_udp(void)
 {
 	odp_packet_t pkt;
 
@@ -338,11 +356,12 @@ void parser_test_vlan_ipv4_udp(void)
 
 	CU_ASSERT(!odp_packet_has_ipv6(pkt));
 	CU_ASSERT(!odp_packet_has_tcp(pkt));
+	CU_ASSERT(!odp_packet_has_sctp(pkt));
 
 	odp_packet_free(pkt);
 }
 
-void parser_test_vlan_qinq_ipv4_udp(void)
+static void parser_test_vlan_qinq_ipv4_udp(void)
 {
 	odp_packet_t pkt;
 
@@ -357,11 +376,30 @@ void parser_test_vlan_qinq_ipv4_udp(void)
 
 	CU_ASSERT(!odp_packet_has_ipv6(pkt));
 	CU_ASSERT(!odp_packet_has_tcp(pkt));
+	CU_ASSERT(!odp_packet_has_sctp(pkt));
 
 	odp_packet_free(pkt);
 }
 
-void parser_test_ipv6_icmp(void)
+static void parser_test_ipv4_sctp(void)
+{
+	odp_packet_t pkt;
+
+	pkt = loopback_packet(pktio_a, pktio_b, test_packet_ipv4_sctp,
+			      sizeof(test_packet_ipv4_sctp));
+	CU_ASSERT_FATAL(pkt != ODP_PACKET_INVALID);
+	CU_ASSERT(odp_packet_has_eth(pkt));
+	CU_ASSERT(odp_packet_has_ipv4(pkt));
+	CU_ASSERT(odp_packet_has_sctp(pkt));
+
+	CU_ASSERT(!odp_packet_has_ipv6(pkt));
+	CU_ASSERT(!odp_packet_has_tcp(pkt));
+	CU_ASSERT(!odp_packet_has_udp(pkt));
+
+	odp_packet_free(pkt);
+}
+
+static void parser_test_ipv6_icmp(void)
 {
 	odp_packet_t pkt;
 
@@ -375,11 +413,12 @@ void parser_test_ipv6_icmp(void)
 	CU_ASSERT(!odp_packet_has_ipv4(pkt));
 	CU_ASSERT(!odp_packet_has_tcp(pkt));
 	CU_ASSERT(!odp_packet_has_udp(pkt));
+	CU_ASSERT(!odp_packet_has_sctp(pkt));
 
 	odp_packet_free(pkt);
 }
 
-void parser_test_ipv6_tcp(void)
+static void parser_test_ipv6_tcp(void)
 {
 	odp_packet_t pkt;
 
@@ -392,11 +431,12 @@ void parser_test_ipv6_tcp(void)
 
 	CU_ASSERT(!odp_packet_has_ipv4(pkt));
 	CU_ASSERT(!odp_packet_has_udp(pkt));
+	CU_ASSERT(!odp_packet_has_sctp(pkt));
 
 	odp_packet_free(pkt);
 }
 
-void parser_test_ipv6_udp(void)
+static void parser_test_ipv6_udp(void)
 {
 	odp_packet_t pkt;
 
@@ -409,11 +449,12 @@ void parser_test_ipv6_udp(void)
 
 	CU_ASSERT(!odp_packet_has_ipv4(pkt));
 	CU_ASSERT(!odp_packet_has_tcp(pkt));
+	CU_ASSERT(!odp_packet_has_sctp(pkt));
 
 	odp_packet_free(pkt);
 }
 
-void parser_test_vlan_ipv6_udp(void)
+static void parser_test_vlan_ipv6_udp(void)
 {
 	odp_packet_t pkt;
 
@@ -427,6 +468,25 @@ void parser_test_vlan_ipv6_udp(void)
 
 	CU_ASSERT(!odp_packet_has_ipv4(pkt));
 	CU_ASSERT(!odp_packet_has_tcp(pkt));
+	CU_ASSERT(!odp_packet_has_sctp(pkt));
+
+	odp_packet_free(pkt);
+}
+
+static void parser_test_ipv6_sctp(void)
+{
+	odp_packet_t pkt;
+
+	pkt = loopback_packet(pktio_a, pktio_b, test_packet_ipv6_sctp,
+			      sizeof(test_packet_ipv6_sctp));
+	CU_ASSERT_FATAL(pkt != ODP_PACKET_INVALID);
+	CU_ASSERT(odp_packet_has_eth(pkt));
+	CU_ASSERT(odp_packet_has_ipv6(pkt));
+	CU_ASSERT(odp_packet_has_sctp(pkt));
+
+	CU_ASSERT(!odp_packet_has_ipv4(pkt));
+	CU_ASSERT(!odp_packet_has_tcp(pkt));
+	CU_ASSERT(!odp_packet_has_udp(pkt));
 
 	odp_packet_free(pkt);
 }
@@ -540,9 +600,11 @@ odp_testinfo_t parser_suite[] = {
 	ODP_TEST_INFO(parser_test_ipv4_udp),
 	ODP_TEST_INFO_CONDITIONAL(parser_test_vlan_ipv4_udp, loop_pktio),
 	ODP_TEST_INFO_CONDITIONAL(parser_test_vlan_qinq_ipv4_udp, loop_pktio),
+	ODP_TEST_INFO(parser_test_ipv4_sctp),
 	ODP_TEST_INFO(parser_test_ipv6_icmp),
 	ODP_TEST_INFO(parser_test_ipv6_tcp),
 	ODP_TEST_INFO(parser_test_ipv6_udp),
 	ODP_TEST_INFO_CONDITIONAL(parser_test_vlan_ipv6_udp, loop_pktio),
+	ODP_TEST_INFO(parser_test_ipv6_sctp),
 	ODP_TEST_INFO_NULL
 };

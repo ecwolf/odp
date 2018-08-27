@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, Linaro Limited
+/* Copyright (c) 2014-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -19,7 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <odp/api/debug.h>
-#include <odp_internal.h>
+#include <odp_global_data.h>
 #ifdef __cplusplus
 extern "C" {
 #endif

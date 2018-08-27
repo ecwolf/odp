@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, Linaro Limited
+/* Copyright (c) 2016-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -36,7 +36,6 @@ static odp_testinfo_t ring_suite_basic[] = {
 	ODP_TEST_INFO(ring_test_basic_create),
 	ODP_TEST_INFO(ring_test_basic_burst),
 	ODP_TEST_INFO(ring_test_basic_bulk),
-	ODP_TEST_INFO(ring_test_basic_watermark),
 	ODP_TEST_INFO_NULL,
 };
 

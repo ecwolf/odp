@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Copyright (c) 2016, Linaro Limited
+# Copyright (c) 2016-2018, Linaro Limited
 # All rights reserved.
 #
 # SPDX-License-Identifier:	BSD-3-Clause
@@ -68,6 +68,9 @@ plat_mmap_vlan_ins${EXEEXT} pktiop0p1 pcap:out=${PCAP_OUT} \
 # Send pcap file to veth interface
 plat_mmap_vlan_ins${EXEEXT} pcap:in=${PCAP_IN} pktiop1p0 \
 	01:02:03:04:05:06 01:08:09:0a:0b:0c
+
+# Wait both processes to exit before removing the interfaces
+wait $!
 
 rm -f ${PCAP_OUT}
 cleanup_pktio_env

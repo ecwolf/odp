@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, Linaro Limited
+/* Copyright (c) 2015-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -39,6 +39,7 @@
 #include <odp_posix_extensions.h>
 
 #include <odp_api.h>
+#include <odp/api/plat/packet_inlines.h>
 #include <odp_packet_internal.h>
 #include <odp_packet_io_internal.h>
 
@@ -47,6 +48,27 @@
 #include <errno.h>
 #include <pcap/pcap.h>
 #include <pcap/bpf.h>
+
+typedef struct {
+	char *fname_rx;		/**< name of pcap file for rx */
+	char *fname_tx;		/**< name of pcap file for tx */
+	void *rx;		/**< rx pcap handle */
+	void *tx;		/**< tx pcap handle */
+	void *tx_dump;		/**< tx pcap dumper handle */
+	odp_pool_t pool;	/**< rx pool */
+	unsigned char *buf;	/**< per-pktio temp buffer */
+	int loops;		/**< number of times to loop rx pcap */
+	int loop_cnt;		/**< number of loops completed */
+	odp_bool_t promisc;	/**< promiscuous mode state */
+} pkt_pcap_t;
+
+ODP_STATIC_ASSERT(PKTIO_PRIVATE_SIZE >= sizeof(pkt_pcap_t),
+		  "PKTIO_PRIVATE_SIZE too small");
+
+static inline pkt_pcap_t *pkt_priv(pktio_entry_t *pktio_entry)
+{
+	return (pkt_pcap_t *)(uintptr_t)(pktio_entry->s.pkt_priv);
+}
 
 #define PKTIO_PCAP_MTU (64 * 1024)
 static const char pcap_mac[] = {0x02, 0xe9, 0x34, 0x80, 0x73, 0x04};
@@ -138,7 +160,7 @@ static int _pcapif_init_tx(pkt_pcap_t *pcap)
 static int pcapif_init(odp_pktio_t id ODP_UNUSED, pktio_entry_t *pktio_entry,
 		       const char *devname, odp_pool_t pool)
 {
-	pkt_pcap_t *pcap = &pktio_entry->s.pkt_pcap;
+	pkt_pcap_t *pcap = pkt_priv(pktio_entry);
 	int ret;
 
 	memset(pcap, 0, sizeof(pkt_pcap_t));
@@ -165,7 +187,7 @@ static int pcapif_init(odp_pktio_t id ODP_UNUSED, pktio_entry_t *pktio_entry,
 
 static int pcapif_close(pktio_entry_t *pktio_entry)
 {
-	pkt_pcap_t *pcap = &pktio_entry->s.pkt_pcap;
+	pkt_pcap_t *pcap = pkt_priv(pktio_entry);
 
 	if (pcap->tx_dump)
 		pcap_dump_close(pcap->tx_dump);
@@ -204,7 +226,7 @@ static int _pcapif_reopen(pkt_pcap_t *pcap)
 }
 
 static int pcapif_recv_pkt(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
-			   odp_packet_t pkts[], int len)
+			   odp_packet_t pkts[], int num)
 {
 	int i;
 	struct pcap_pkthdr *hdr;
@@ -212,7 +234,7 @@ static int pcapif_recv_pkt(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
 	odp_packet_t pkt;
 	odp_packet_hdr_t *pkt_hdr;
 	uint32_t pkt_len;
-	pkt_pcap_t *pcap = &pktio_entry->s.pkt_pcap;
+	pkt_pcap_t *pcap = pkt_priv(pktio_entry);
 	odp_time_t ts_val;
 	odp_time_t *ts = NULL;
 
@@ -226,7 +248,7 @@ static int pcapif_recv_pkt(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
 	    pktio_entry->s.config.pktin.bit.ts_ptp)
 		ts = &ts_val;
 
-	for (i = 0; i < len; ) {
+	for (i = 0; i < num; ) {
 		int ret;
 
 		ret = pcap_next_ex(pcap->rx, &hdr, &data);
@@ -247,7 +269,7 @@ static int pcapif_recv_pkt(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
 		if (ts != NULL)
 			ts_val = odp_time_global();
 
-		pkt_hdr = odp_packet_hdr(pkt);
+		pkt_hdr = packet_hdr(pkt);
 
 		if (odp_packet_copy_from_mem(pkt, 0, hdr->caplen, data) != 0) {
 			ODP_ERR("failed to copy packet data\n");
@@ -255,7 +277,8 @@ static int pcapif_recv_pkt(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
 		}
 
 		packet_parse_layer(pkt_hdr,
-				   pktio_entry->s.config.parser.layer);
+				   pktio_entry->s.config.parser.layer,
+				   pktio_entry->s.in_chksums);
 		pktio_entry->s.stats.in_octets += pkt_hdr->frame_len;
 
 		packet_set_ts(pkt_hdr, ts);
@@ -293,9 +316,9 @@ static int _pcapif_dump_pkt(pkt_pcap_t *pcap, odp_packet_t pkt)
 }
 
 static int pcapif_send_pkt(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
-			   const odp_packet_t pkts[], int len)
+			   const odp_packet_t pkts[], int num)
 {
-	pkt_pcap_t *pcap = &pktio_entry->s.pkt_pcap;
+	pkt_pcap_t *pcap = pkt_priv(pktio_entry);
 	int i;
 
 	odp_ticketlock_lock(&pktio_entry->s.txl);
@@ -305,7 +328,7 @@ static int pcapif_send_pkt(pktio_entry_t *pktio_entry, int index ODP_UNUSED,
 		return 0;
 	}
 
-	for (i = 0; i < len; ++i) {
+	for (i = 0; i < num; ++i) {
 		int pkt_len = odp_packet_len(pkts[i]);
 
 		if (pkt_len > PKTIO_PCAP_MTU) {
@@ -363,7 +386,7 @@ static int pcapif_promisc_mode_set(pktio_entry_t *pktio_entry,
 {
 	char filter_exp[64] = {0};
 	struct bpf_program bpf;
-	pkt_pcap_t *pcap = &pktio_entry->s.pkt_pcap;
+	pkt_pcap_t *pcap = pkt_priv(pktio_entry);
 
 	if (!pcap->rx) {
 		pcap->promisc = enable;
@@ -403,7 +426,7 @@ static int pcapif_promisc_mode_set(pktio_entry_t *pktio_entry,
 
 static int pcapif_promisc_mode_get(pktio_entry_t *pktio_entry)
 {
-	return pktio_entry->s.pkt_pcap.promisc;
+	return pkt_priv(pktio_entry)->promisc;
 }
 
 static int pcapif_stats_reset(pktio_entry_t *pktio_entry)
@@ -440,6 +463,7 @@ const pktio_if_ops_t pcap_pktio_ops = {
 	.promisc_mode_set = pcapif_promisc_mode_set,
 	.promisc_mode_get = pcapif_promisc_mode_get,
 	.mac_get = pcapif_mac_addr_get,
+	.mac_set = NULL,
 	.capability = pcapif_capability,
 	.pktin_ts_res = NULL,
 	.pktin_ts_from_ns = NULL,

@@ -1,16 +1,14 @@
 /* Copyright 2015 EZchip Semiconductor Ltd. All Rights Reserved.
  *
- * Copyright (c) 2015, Linaro Limited
+ * Copyright (c) 2015-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "config.h"
+#include <odp_posix_extensions.h>
 
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
 #include <stdint.h>
 #include <string.h>
 #include <malloc.h>
@@ -26,6 +24,13 @@
 #include <protocols/eth.h>
 #include <protocols/ip.h>
 #include <odp_traffic_mngr_internal.h>
+#include <odp/api/plat/packet_inlines.h>
+#include <odp/api/plat/byteorder_inlines.h>
+#include <odp/api/time.h>
+#include <odp/api/plat/time_inlines.h>
+#include <odp_macros_internal.h>
+#include <odp_init_internal.h>
+#include <odp_errno_define.h>
 
 /* Local vars */
 static const
@@ -103,20 +108,20 @@ static odp_bool_t tm_demote_pkt_desc(tm_system_t *tm_system,
 				     tm_shaper_obj_t *timer_shaper,
 				     pkt_desc_t *demoted_pkt_desc);
 
-static int queue_tm_reenq(queue_t queue, odp_buffer_hdr_t *buf_hdr)
+static int queue_tm_reenq(odp_queue_t queue, odp_buffer_hdr_t *buf_hdr)
 {
-	odp_tm_queue_t tm_queue = MAKE_ODP_TM_QUEUE((uint8_t *)queue -
-						    offsetof(tm_queue_obj_t,
-							     tm_qentry));
-	odp_packet_t pkt = _odp_packet_from_buf_hdr(buf_hdr);
+	odp_tm_queue_t tm_queue = MAKE_ODP_TM_QUEUE(odp_queue_context(queue));
+	odp_packet_t pkt = packet_from_buf_hdr(buf_hdr);
 
 	return odp_tm_enq(tm_queue, pkt);
 }
 
-static int queue_tm_reenq_multi(queue_t queue ODP_UNUSED,
-				odp_buffer_hdr_t *buf[] ODP_UNUSED,
-				int num ODP_UNUSED)
+static int queue_tm_reenq_multi(odp_queue_t queue, odp_buffer_hdr_t *buf[],
+				int num)
 {
+	(void)queue;
+	(void)buf;
+	(void)num;
 	ODP_ABORT("Invalid call to queue_tm_reenq_multi()\n");
 	return 0;
 }
@@ -175,7 +180,7 @@ static void tm_init_random_data(tm_random_data_t *tm_random_data)
 	byte_cnt = 0;
 	while (byte_cnt < 256)
 		byte_cnt += odp_random_data(&tm_random_data->buf[byte_cnt],
-					    256 - byte_cnt, 1);
+					    256 - byte_cnt, ODP_RANDOM_BASIC);
 
 	tm_random_data->next_random_byte = 0;
 }
@@ -619,8 +624,8 @@ static void tm_sched_config_set(tm_shaper_obj_t *shaper_obj,
 }
 
 /* Any locking required and validity checks must be done by the caller! */
-static void tm_threshold_config_set(tm_wred_node_t    *wred_node,
-				    odp_tm_threshold_t thresholds_profile)
+static int tm_threshold_config_set(tm_wred_node_t    *wred_node,
+				   odp_tm_threshold_t thresholds_profile)
 {
 	tm_queue_thresholds_t *threshold_params;
 
@@ -630,15 +635,18 @@ static void tm_threshold_config_set(tm_wred_node_t    *wred_node,
 	}
 
 	if (thresholds_profile == ODP_TM_INVALID)
-		return;
+		return 0;
 
 	threshold_params = tm_get_profile_params(thresholds_profile,
 						 TM_THRESHOLD_PROFILE);
-	if (threshold_params == NULL)
-		return;
+	if (threshold_params == NULL) {
+		ODP_DBG("threshold_params is NULL\n");
+		return -1;
+	}
 
 	threshold_params->ref_cnt++;
 	wred_node->threshold_params = threshold_params;
+	return 0;
 }
 
 /* Any locking required and validity checks must be done by the caller! */
@@ -729,7 +737,8 @@ static uint64_t time_till_not_red(tm_shaper_params_t *shaper_params,
 		commit_delay = (-shaper_obj->commit_cnt)
 			/ shaper_params->commit_rate;
 
-	min_time_delay = MAX(shaper_obj->shaper_params->min_time_delta, 256);
+	min_time_delay =
+	    MAX(shaper_obj->shaper_params->min_time_delta, UINT64_C(256));
 	commit_delay = MAX(commit_delay, min_time_delay);
 	if (shaper_params->peak_rate == 0)
 		return commit_delay;
@@ -1668,7 +1677,7 @@ static odp_tm_percent_t tm_queue_fullness(tm_wred_params_t      *wred_params,
 		return 0;
 
 	fullness = (10000 * current_cnt) / max_cnt;
-	return (odp_tm_percent_t)MIN(fullness, 50000);
+	return (odp_tm_percent_t)MIN(fullness, UINT64_C(50000));
 }
 
 static odp_bool_t tm_local_random_drop(tm_system_t      *tm_system,
@@ -1940,7 +1949,7 @@ static void egress_vlan_marking(tm_vlan_marking_t *vlan_marking,
 	split_hdr = hdr_len < (_ODP_ETHHDR_LEN + _ODP_VLANHDR_LEN);
 	if (split_hdr) {
 		odp_packet_copy_to_mem(odp_pkt, _ODP_ETHHDR_LEN,
-				       _ODP_VLANHDR_LEN, &vlan_hdr);
+					_ODP_VLANHDR_LEN, &vlan_hdr);
 		vlan_hdr_ptr = &vlan_hdr;
 	}
 
@@ -1955,7 +1964,7 @@ static void egress_vlan_marking(tm_vlan_marking_t *vlan_marking,
 	vlan_hdr_ptr->tci = odp_cpu_to_be_16(new_tci);
 	if (split_hdr)
 		odp_packet_copy_from_mem(odp_pkt, _ODP_ETHHDR_LEN,
-					 _ODP_VLANHDR_LEN, &vlan_hdr);
+					  _ODP_VLANHDR_LEN, &vlan_hdr);
 }
 
 static void egress_ipv4_tos_marking(tm_tos_marking_t *tos_marking,
@@ -1979,7 +1988,7 @@ static void egress_ipv4_tos_marking(tm_tos_marking_t *tos_marking,
 	split_hdr = hdr_len < 12;
 	if (split_hdr) {
 		odp_packet_copy_to_mem(odp_pkt, l3_offset,
-				       _ODP_IPV4HDR_LEN, &ipv4_hdr);
+					_ODP_IPV4HDR_LEN, &ipv4_hdr);
 		ipv4_hdr_ptr = &ipv4_hdr;
 	}
 
@@ -2021,7 +2030,7 @@ static void egress_ipv4_tos_marking(tm_tos_marking_t *tos_marking,
 	ipv4_hdr_ptr->chksum = odp_cpu_to_be_16((~ones_compl_sum) & 0xFFFF);
 	if (split_hdr)
 		odp_packet_copy_from_mem(odp_pkt, l3_offset,
-					 _ODP_IPV4HDR_LEN, &ipv4_hdr);
+					  _ODP_IPV4HDR_LEN, &ipv4_hdr);
 }
 
 static void egress_ipv6_tc_marking(tm_tos_marking_t *tos_marking,
@@ -2045,7 +2054,7 @@ static void egress_ipv6_tc_marking(tm_tos_marking_t *tos_marking,
 	split_hdr = hdr_len < 4;
 	if (split_hdr) {
 		odp_packet_copy_to_mem(odp_pkt, l3_offset,
-				       _ODP_IPV6HDR_LEN, &ipv6_hdr);
+					_ODP_IPV6HDR_LEN, &ipv6_hdr);
 		ipv6_hdr_ptr = &ipv6_hdr;
 	}
 
@@ -2074,7 +2083,7 @@ static void egress_ipv6_tc_marking(tm_tos_marking_t *tos_marking,
 
 	if (split_hdr)
 		odp_packet_copy_from_mem(odp_pkt, l3_offset,
-					 _ODP_IPV6HDR_LEN, &ipv6_hdr);
+					  _ODP_IPV6HDR_LEN, &ipv6_hdr);
 }
 
 static void tm_egress_marking(tm_system_t *tm_system, odp_packet_t odp_pkt)
@@ -2499,7 +2508,7 @@ static void tm_system_capabilities_set(odp_tm_capabilities_t *cap_ptr,
 	memset(cap_ptr, 0, sizeof(odp_tm_capabilities_t));
 
 	max_queues       = MIN(req_ptr->max_tm_queues,
-			       ODP_TM_MAX_NUM_TM_NODES);
+			       (uint32_t)ODP_TM_MAX_NUM_TM_NODES);
 	shaper_supported = req_ptr->tm_queue_shaper_needed;
 	wred_supported   = req_ptr->tm_queue_wred_needed;
 	dual_slope       = req_ptr->tm_queue_dual_slope_needed;
@@ -2523,8 +2532,9 @@ static void tm_system_capabilities_set(odp_tm_capabilities_t *cap_ptr,
 		per_level_req = &req_ptr->per_level[level_idx];
 
 		max_nodes        = MIN(per_level_req->max_num_tm_nodes,
-				       ODP_TM_MAX_NUM_TM_NODES);
-		max_fanin        = MIN(per_level_req->max_fanin_per_node, 1024);
+				       (uint32_t)ODP_TM_MAX_NUM_TM_NODES);
+		max_fanin        = MIN(per_level_req->max_fanin_per_node,
+				       UINT32_C(1024));
 		max_priority     = MIN(per_level_req->max_priority,
 				       ODP_TM_MAX_PRIORITIES - 1);
 		min_weight       = MAX(per_level_req->min_weight,
@@ -3926,8 +3936,10 @@ odp_tm_queue_t odp_tm_queue_create(odp_tm_t odp_tm,
 		free(tm_queue_obj);
 		return ODP_TM_INVALID;
 	}
-	tm_queue_obj->tm_qentry = queue_fn->from_ext(queue);
-	queue_fn->set_enq_deq_fn(tm_queue_obj->tm_qentry,
+
+	tm_queue_obj->queue = queue;
+	odp_queue_context_set(queue, tm_queue_obj, sizeof(tm_queue_obj_t));
+	queue_fn->set_enq_deq_fn(queue,
 				 queue_tm_reenq, queue_tm_reenq_multi,
 				 NULL, NULL);
 
@@ -3957,12 +3969,9 @@ odp_tm_queue_t odp_tm_queue_create(odp_tm_t odp_tm,
 
 int odp_tm_queue_destroy(odp_tm_queue_t tm_queue)
 {
-	tm_wred_params_t *wred_params;
 	tm_shaper_obj_t  *shaper_obj;
 	tm_queue_obj_t   *tm_queue_obj;
-	tm_wred_node_t   *tm_wred_node;
 	tm_system_t      *tm_system;
-	uint32_t          color;
 
 	/* First lookup tm_queue. */
 	tm_queue_obj = GET_TM_QUEUE_OBJ(tm_queue);
@@ -3980,28 +3989,11 @@ int odp_tm_queue_destroy(odp_tm_queue_t tm_queue)
 	    (tm_queue_obj->pkt        != ODP_PACKET_INVALID))
 		return -1;
 
-	/* Check that there is no shaper profile, threshold profile or wred
-	 * profile currently associated with this tm_queue. */
-	if (shaper_obj->shaper_params != NULL)
-		return -1;
-
-	tm_wred_node = tm_queue_obj->tm_wred_node;
-	if (tm_wred_node != NULL) {
-		if (tm_wred_node->threshold_params != NULL)
-			return -1;
-
-		for (color = 0; color < ODP_NUM_PACKET_COLORS; color++) {
-			wred_params = tm_wred_node->wred_params[color];
-			if (wred_params != NULL)
-				return -1;
-		}
-	}
-
 	/* Now that all of the checks are done, time to so some freeing. */
 	odp_ticketlock_lock(&tm_system->tm_system_lock);
 	tm_system->queue_num_tbl[tm_queue_obj->queue_num - 1] = NULL;
 
-	odp_queue_destroy(queue_fn->to_ext(tm_queue_obj->tm_qentry));
+	odp_queue_destroy(tm_queue_obj->queue);
 
 	/* First delete any associated tm_wred_node and then the tm_queue_obj
 	 * itself */
@@ -4082,15 +4074,17 @@ int odp_tm_queue_threshold_config(odp_tm_queue_t tm_queue,
 				  odp_tm_threshold_t thresholds_profile)
 {
 	tm_queue_obj_t *tm_queue_obj;
+	int ret;
 
 	tm_queue_obj = GET_TM_QUEUE_OBJ(tm_queue);
 	if (!tm_queue_obj)
 		return -1;
 
 	odp_ticketlock_lock(&tm_profile_lock);
-	tm_threshold_config_set(tm_queue_obj->tm_wred_node, thresholds_profile);
+	ret = tm_threshold_config_set(tm_queue_obj->tm_wred_node,
+				      thresholds_profile);
 	odp_ticketlock_unlock(&tm_profile_lock);
-	return 0;
+	return ret;
 }
 
 int odp_tm_queue_wred_config(odp_tm_queue_t tm_queue,

@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, Linaro Limited
+/* Copyright (c) 2013-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -11,8 +11,8 @@
  * ODP schedule
  */
 
-#ifndef ODP_API_SCHEDULE_H_
-#define ODP_API_SCHEDULE_H_
+#ifndef ODP_API_SPEC_SCHEDULE_H_
+#define ODP_API_SPEC_SCHEDULE_H_
 #include <odp/visibility_begin.h>
 
 #ifdef __cplusplus
@@ -43,26 +43,6 @@ extern "C" {
 /**
  * @def ODP_SCHED_GROUP_NAME_LEN
  * Maximum schedule group name length in chars including null char
- */
-
-/**
- * @def ODP_SCHED_GROUP_INVALID
- * Invalid scheduler group
- */
-
-/**
- * @def ODP_SCHED_GROUP_ALL
- * Predefined scheduler group of all threads
- */
-
-/**
- * @def ODP_SCHED_GROUP_WORKER
- * Predefined scheduler group of all worker threads
- */
-
-/**
- * @def ODP_SCHED_GROUP_CONTROL
- * Predefined scheduler group of all control threads
  */
 
 /**
@@ -347,12 +327,15 @@ int odp_schedule_group_info(odp_schedule_group_t group,
  * be protected by its own ordered lock. This promotes maximum parallelism by
  * allowing order to maintained on a more granular basis. If an ordered lock
  * is used multiple times in the same ordered context results are undefined.
+ * Only one ordered lock can be active in an ordered context at any given time.
+ * Results are undefined when multiple ordered locks are acquired in nested
+ * fashion within the same ordered context.
  *
  * @param lock_index Index of the ordered lock in the current context to be
  *                   acquired. Must be in the range 0..odp_queue_lock_count()
  *                   - 1
  */
-void odp_schedule_order_lock(unsigned lock_index);
+void odp_schedule_order_lock(uint32_t lock_index);
 
 /**
  * Release ordered context lock
@@ -365,7 +348,56 @@ void odp_schedule_order_lock(unsigned lock_index);
  *                   hold this lock. Must be in the range
  *                   0..odp_queue_lock_count() - 1
  */
-void odp_schedule_order_unlock(unsigned lock_index);
+void odp_schedule_order_unlock(uint32_t lock_index);
+
+/**
+ * Release existing ordered context lock and acquire a new lock
+ *
+ * This call is valid only when holding an ordered synchronization context.
+ * Release a previously locked ordered context lock and acquire a new ordered
+ * context lock. The operation is equivalent to application calling first
+ * odp_schedule_order_unlock(unlock_index) and then
+ * odp_schedule_order_lock(lock_index). The same constraints apply with this
+ * call as with those two.
+ *
+ * @param unlock_index	Index of the acquired ordered lock in the current
+ *			context to be released.
+ * @param lock_index	Index of the ordered lock in the current context to be
+ *			acquired. Must be in the range
+ *			0...odp_queue_lock_count() - 1.
+ *
+ * @see odp_schedule_order_lock(), odp_schedule_order_unlock()
+ *
+ */
+void odp_schedule_order_unlock_lock(uint32_t unlock_index, uint32_t lock_index);
+
+/** Asynchronous ordered context lock
+ * Request an ordered context lock to be acquired. Starts an ordered context
+ * lock acquire operation, but does not wait until the lock has been acquired.
+ * Application can use this call to potentially interleave some processing
+ * within waiting for this lock. Each start lock call must be paired with a wait
+ * call that blocks until the lock has been acquired. Locks cannot be acquired
+ * in nested fashion i.e each start call must follow a paring wait and unlock
+ * calls, before using another lock.
+ * The same constraints apply as with odp_schedule_order_lock()
+ *
+ * @param lock_index	Index of the ordered lock in the current context to
+ *			start acquire operation.
+ *			Must be in the range 0..odp_queue_lock_count() - 1.
+ *
+ */
+void odp_schedule_order_lock_start(uint32_t lock_index);
+
+/** Asynchronous ordered context lock wait
+ * Wait for a previously started lock acquire operation to finish.
+ * Lock index must match with the previous start call. Ordered lock acquisition
+ * will be completed during this call.
+ *
+ * @param lock_index	Index of the ordered lock in the current context to
+ *			complete acquire operation.
+ *			Must be in the range 0..odp_queue_lock_count() - 1.
+ */
+void odp_schedule_order_lock_wait(uint32_t lock_index);
 
 /**
  * @}

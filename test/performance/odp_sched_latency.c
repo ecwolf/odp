@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, Linaro Limited
+/* Copyright (c) 2016-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -27,7 +27,6 @@
 /* GNU lib C */
 #include <getopt.h>
 
-#define MAX_WORKERS	  64		/**< Maximum number of worker threads */
 #define MAX_QUEUES	  4096		/**< Maximum number of queues */
 #define EVENT_POOL_SIZE	  (1024 * 1024) /**< Event pool size */
 #define TEST_ROUNDS (4 * 1024 * 1024)	/**< Test rounds for each thread */
@@ -75,7 +74,7 @@ typedef struct {
 
 /** Test arguments */
 typedef struct {
-	int cpu_count;			/**< CPU count */
+	unsigned int cpu_count;	/**< CPU count */
 	odp_schedule_sync_t sync_type;	/**< Scheduler sync type */
 	struct {
 		int queues;	/**< Number of scheduling queues */
@@ -97,15 +96,16 @@ typedef struct {
 } test_stat_t;
 
 /** Performance test statistics (per core) */
-typedef union {
+typedef union ODP_ALIGNED_CACHE {
 	test_stat_t prio[NUM_PRIOS]; /**< Test statistics per priority */
 
 	uint8_t pad[CACHE_ALIGN_ROUNDUP(NUM_PRIOS * sizeof(test_stat_t))];
-} core_stat_t ODP_ALIGNED_CACHE;
+} core_stat_t;
 
 /** Test global variables */
 typedef struct {
-	core_stat_t	 core_stat[MAX_WORKERS]; /**< Core specific stats */
+	/** Core specific stats */
+	core_stat_t	 core_stat[ODP_THREAD_COUNT_MAX];
 	odp_barrier_t    barrier; /**< Barrier for thread synchronization */
 	odp_pool_t       pool;	  /**< Pool for allocating test events */
 	test_args_t      args;	  /**< Parsed command line arguments */
@@ -265,7 +265,7 @@ static void print_results(test_globals_t *globals)
 	test_stat_t total;
 	test_args_t *args;
 	uint64_t avg;
-	int i, j;
+	unsigned int i, j;
 
 	args = &globals->args;
 	stype = globals->args.sync_type;
@@ -500,7 +500,7 @@ static void usage(void)
 	       "\n"
 	       "Usage: ./odp_sched_latency [options]\n"
 	       "Optional OPTIONS:\n"
-	       "  -c, --count <number> CPU count\n"
+	       "  -c, --count <number> CPU count, 0=all available, default=1\n"
 	       "  -l, --lo-prio-queues <number> Number of low priority scheduled queues\n"
 	       "  -t, --hi-prio-queues <number> Number of high priority scheduled queues\n"
 	       "  -m, --lo-prio-events-per-queue <number> Number of events per low priority queue\n"
@@ -550,8 +550,9 @@ static void parse_args(int argc, char *argv[], test_args_t *args)
 	static const char *shortopts = "+c:s:l:t:m:n:o:p:rh";
 
 	/* Let helper collect its own arguments (e.g. --odph_proc) */
-	odph_parse_options(argc, argv, shortopts, longopts);
+	argc = odph_parse_options(argc, argv);
 
+	args->cpu_count = 1;
 	args->sync_type = ODP_SCHED_SYNC_PARALLEL;
 	args->sample_per_prio = SAMPLE_EVENT_PER_PRIO;
 	args->prio[LO_PRIO].queues = LO_PRIO_QUEUES;
@@ -561,7 +562,6 @@ static void parse_args(int argc, char *argv[], test_args_t *args)
 	args->prio[LO_PRIO].events_per_queue = EVENTS_PER_LO_PRIO_QUEUE;
 	args->prio[HI_PRIO].events_per_queue = EVENTS_PER_HI_PRIO_QUEUE;
 
-	opterr = 0; /* Do not issue errors on helper options */
 	while (1) {
 		opt = getopt_long(argc, argv, shortopts, longopts, &long_index);
 
@@ -617,8 +617,9 @@ static void parse_args(int argc, char *argv[], test_args_t *args)
 	}
 
 	/* Make sure arguments are valid */
-	if (args->cpu_count > MAX_WORKERS)
-		args->cpu_count = MAX_WORKERS;
+	/* -1 for main thread */
+	if (args->cpu_count > ODP_THREAD_COUNT_MAX - 1)
+		args->cpu_count = ODP_THREAD_COUNT_MAX - 1;
 	if (args->prio[LO_PRIO].queues > MAX_QUEUES)
 		args->prio[LO_PRIO].queues = MAX_QUEUES;
 	if (args->prio[HI_PRIO].queues > MAX_QUEUES)

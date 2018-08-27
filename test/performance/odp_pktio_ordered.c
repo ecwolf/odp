@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, Linaro Limited
+/* Copyright (c) 2016-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -75,11 +75,11 @@
 
 #define JHASH_GOLDEN_RATIO	0x9e3779b9
 
-/** Maximum number of worker threads */
-#define MAX_WORKERS		64
+/* Maximum pool and queue size */
+#define MAX_NUM_PKT             (8 * 1024)
 
-/** Number of packet buffers in the memory pool */
-#define PKT_POOL_SIZE		8192
+/** Maximum number of worker threads */
+#define MAX_WORKERS		(ODP_THREAD_COUNT_MAX - 1)
 
 /** Buffer size of the packet pool buffer in bytes*/
 #define PKT_POOL_BUF_SIZE	1856
@@ -92,9 +92,6 @@
 
 /** Maximum number of pktio queues per interface */
 #define MAX_QUEUES		32
-
-/** Seems to need at least 8192 elements per queue */
-#define QUEUE_SIZE		8192
 
 /** Maximum number of pktio interfaces */
 #define MAX_PKTIOS		8
@@ -137,7 +134,7 @@ typedef enum pktin_mode_t {
  * Parsed command line application arguments
  */
 typedef struct {
-	int cpu_count;		/**< CPU count */
+	unsigned int cpu_count; /**< CPU count */
 	int if_count;		/**< Number of interfaces to be used */
 	int addr_count;		/**< Number of dst addresses to be used */
 	int num_rx_q;		/**< Number of input queues per interface */
@@ -179,7 +176,7 @@ ODP_STATIC_ASSERT(sizeof(flow_t) <= PKT_UAREA_SIZE,
 /**
  * Statistics
  */
-typedef union {
+typedef union ODP_ALIGNED_CACHE {
 	struct {
 		/** Number of forwarded packets */
 		uint64_t packets;
@@ -192,7 +189,7 @@ typedef union {
 	} s;
 
 	uint8_t padding[ODP_CACHE_LINE_SIZE];
-} stats_t ODP_ALIGNED_CACHE;
+} stats_t;
 
 /**
  * IPv4 5-tuple
@@ -618,7 +615,7 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 	}
 
 	odp_pktio_config_init(&config);
-	config.parser.layer = ODP_PKTIO_PARSER_LAYER_L2;
+	config.parser.layer = ODP_PROTO_LAYER_L2;
 	odp_pktio_config(pktio, &config);
 
 	odp_pktin_queue_param_init(&pktin_param);
@@ -829,7 +826,7 @@ static void usage(char *progname)
 	       "  -r, --num_rx_q    Number of RX queues per interface\n"
 	       "  -f, --num_flows   Number of packet flows\n"
 	       "  -e, --extra_input <number>  Number of extra input processing rounds\n"
-	       "  -c, --count <number>        CPU count.\n"
+	       "  -c, --count <number>        CPU count, 0=all available, default=1\n"
 	       "  -t, --time  <number>        Time in seconds to run.\n"
 	       "  -a, --accuracy <number>     Statistics print interval in seconds\n"
 	       "                              (default is 1 second).\n"
@@ -871,15 +868,14 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 	static const char *shortopts =  "+c:+t:+a:i:m:d:r:f:e:h";
 
 	/* let helper collect its own arguments (e.g. --odph_proc) */
-	odph_parse_options(argc, argv, shortopts, longopts);
+	argc = odph_parse_options(argc, argv);
 
 	appl_args->time = 0; /* loop forever if time to run is 0 */
 	appl_args->accuracy = DEF_STATS_INT;
+	appl_args->cpu_count = 1; /* use one worker by default */
 	appl_args->num_rx_q = DEF_NUM_RX_QUEUES;
 	appl_args->num_flows = DEF_NUM_FLOWS;
 	appl_args->extra_rounds = DEF_EXTRA_ROUNDS;
-
-	opterr = 0; /* do not issue errors on helper options */
 
 	while (1) {
 		opt = getopt_long(argc, argv, shortopts, longopts, &long_index);
@@ -1002,12 +998,6 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		}
 	}
 
-	if (appl_args->cpu_count > MAX_WORKERS) {
-		printf("Too many workers requested %d, max: %d\n",
-		       appl_args->cpu_count, MAX_WORKERS);
-		exit(EXIT_FAILURE);
-	}
-
 	if (appl_args->num_flows > MAX_FLOWS) {
 		printf("Too many flows requested %d, max: %d\n",
 		       appl_args->num_flows, MAX_FLOWS);
@@ -1074,7 +1064,8 @@ int main(int argc, char *argv[])
 	odp_pool_t pool;
 	odp_pool_param_t params;
 	odp_shm_t shm;
-	odp_queue_capability_t capa;
+	odp_queue_capability_t queue_capa;
+	odp_pool_capability_t pool_capa;
 	odph_ethaddr_t new_addr;
 	odph_odpthread_t thread_tbl[MAX_WORKERS];
 	stats_t *stats;
@@ -1085,6 +1076,7 @@ int main(int argc, char *argv[])
 	int ret;
 	int num_workers;
 	int in_mode;
+	uint32_t queue_size, pool_size;
 
 	/* Init ODP before calling anything else */
 	if (odp_init_global(&instance, NULL, NULL)) {
@@ -1095,6 +1087,16 @@ int main(int argc, char *argv[])
 	/* Init this thread */
 	if (odp_init_local(instance, ODP_THREAD_CONTROL)) {
 		LOG_ERR("Error: ODP local init failed.\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (odp_queue_capability(&queue_capa)) {
+		LOG_ERR("Error: Queue capa failed\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (odp_pool_capability(&pool_capa)) {
+		LOG_ERR("Error: Pool capa failed\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1121,8 +1123,7 @@ int main(int argc, char *argv[])
 
 	if (gbl_args->appl.in_mode == SCHED_ORDERED) {
 		/* At least one ordered lock required  */
-		odp_queue_capability(&capa);
-		if (capa.max_ordered_locks < 1) {
+		if (queue_capa.max_ordered_locks < 1) {
 			LOG_ERR("Error: Ordered locks not available.\n");
 			exit(EXIT_FAILURE);
 		}
@@ -1130,9 +1131,8 @@ int main(int argc, char *argv[])
 	/* Print both system and application information */
 	print_info(NO_PATH(argv[0]), &gbl_args->appl);
 
-	/* Default to system CPU count unless user specified */
 	num_workers = MAX_WORKERS;
-	if (gbl_args->appl.cpu_count)
+	if (gbl_args->appl.cpu_count && gbl_args->appl.cpu_count < MAX_WORKERS)
 		num_workers = gbl_args->appl.cpu_count;
 
 	/* Get default worker cpumask */
@@ -1145,11 +1145,25 @@ int main(int argc, char *argv[])
 	printf("First CPU:          %i\n", odp_cpumask_first(&cpumask));
 	printf("CPU mask:           %s\n\n", cpumaskstr);
 
+	pool_size = MAX_NUM_PKT;
+	if (pool_capa.pkt.max_num && pool_capa.pkt.max_num < MAX_NUM_PKT)
+		pool_size = pool_capa.pkt.max_num;
+
+	queue_size = MAX_NUM_PKT;
+	if (queue_capa.sched.max_size &&
+	    queue_capa.sched.max_size < MAX_NUM_PKT)
+		queue_size = queue_capa.sched.max_size;
+
+	/* Pool should not be larger than queue, otherwise queue enqueues at
+	 * packet input may fail. */
+	if (pool_size > queue_size)
+		pool_size = queue_size;
+
 	/* Create packet pool */
 	odp_pool_param_init(&params);
 	params.pkt.seg_len = PKT_POOL_BUF_SIZE;
 	params.pkt.len     = PKT_POOL_BUF_SIZE;
-	params.pkt.num     = PKT_POOL_SIZE;
+	params.pkt.num     = pool_size;
 	params.pkt.uarea_size = PKT_UAREA_SIZE;
 	params.type        = ODP_POOL_PACKET;
 
@@ -1225,7 +1239,7 @@ int main(int argc, char *argv[])
 			qparam.sched.prio = ODP_SCHED_PRIO_DEFAULT;
 			qparam.sched.sync = ODP_SCHED_SYNC_ATOMIC;
 			qparam.sched.group = ODP_SCHED_GROUP_ALL;
-			qparam.size	  = QUEUE_SIZE;
+			qparam.size	  = queue_size;
 
 			gbl_args->flow_qcontext[i][j].idx = i;
 			gbl_args->flow_qcontext[i][j].input_queue = 0;

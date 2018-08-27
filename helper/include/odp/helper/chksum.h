@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, Linaro Limited
+/* Copyright (c) 2014-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -33,33 +33,6 @@ typedef enum {
 	ODPH_CHKSUM_VERIFY,   /**< See if TCP/UDP header chksum is correct */
 	ODPH_CHKSUM_RETURN    /**< Don't generate or verify chksum */
 } odph_chksum_op_t;
-
-/**
- * Checksum
- *
- * @param buffer calculate chksum for buffer
- * @param len    buffer length
- *
- * @return checksum value in network order
- */
-static inline odp_u16sum_t odph_chksum(void *buffer, int len)
-{
-	uint16_t *buf = (uint16_t *)buffer;
-	uint32_t sum = 0;
-	uint16_t result;
-
-	for (sum = 0; len > 1; len -= 2)
-		sum += *buf++;
-
-	if (len == 1)
-		sum += *(unsigned char *)buf;
-
-	sum = (sum >> 16) + (sum & 0xFFFF);
-	sum += (sum >> 16);
-	result = ~sum;
-
-	return  (__odp_force odp_u16sum_t) result;
-}
 
 /**
  * General Purpose TCP/UDP checksum function
@@ -215,6 +188,48 @@ static inline int odph_udp_chksum_verify(odp_packet_t odp_pkt)
 
 	return odph_udp_tcp_chksum(odp_pkt, ODPH_CHKSUM_VERIFY, NULL);
 }
+
+/**
+ * Generate SCTP checksum
+ *
+ * This function supports SCTP over either IPv4 or IPV6 - including handling
+ * any IPv4 header options and any IPv6 extension headers.  However it
+ * does not handle tunneled pkts (i.e. any case where there is more than
+ * one IPv4/IPv6 header).
+ * This function also handles non-contiguous pkts.  In particular it can
+ * handle arbitrary packet segmentation, including cases where the segments
+ * are not 2 byte aligned, nor have a length that is a multiple of 2.  This
+ * function also can handle jumbo frames (at least up to 10K).
+ *
+ * This function will insert the calculated CRC32-c checksum into the proper
+ * location in the SCTP header.
+ *
+ * @param  odp_pkt     Calculate and insert chksum for this SCTP pkt, which can
+ *                     be over IPv4 or IPv6.
+ * @retval 0 on success
+ * @retval <0 on failure
+ */
+int odph_sctp_chksum_set(odp_packet_t odp_pkt);
+
+/**
+ * Verify SCTP checksum
+ *
+ * This function supports SCTP over either IPv4 or IPV6 - including handling
+ * any IPv4 header options and any IPv6 extension headers.  However it
+ * does not handle tunneled pkts (i.e. any case where there is more than
+ * one IPv4/IPv6 header).
+ * This function also handles non-contiguous pkts.  In particular it can
+ * handle arbitrary packet segmentation, including cases where the segments
+ * are not 2 byte aligned, nor have a length that is a multiple of 2.  This
+ * function also can handle jumbo frames (at least up to 10K).
+ *
+ * @param  odp_pkt     Calculate and compare the chksum for this SCTP pkt,
+ *                     which can be over IPv4 or IPv6.
+ * @retval <0 on failure
+ * @retval 0 if the incoming chksum field is correct
+ * @retval 2 when the chksum field is incorrect
+ */
+int odph_sctp_chksum_verify(odp_packet_t odp_pkt);
 
 /**
  * @}

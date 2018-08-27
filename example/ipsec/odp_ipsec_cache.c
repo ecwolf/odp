@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, Linaro Limited
+/* Copyright (c) 2014-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -26,6 +26,10 @@ void init_ipsec_cache(void)
 			      sizeof(ipsec_cache_t),
 			      ODP_CACHE_LINE_SIZE,
 			      0);
+	if (shm == ODP_SHM_INVALID) {
+		EXAMPLE_ERR("Error: shared mem alloc failed.\n");
+		exit(EXIT_FAILURE);
+	}
 
 	ipsec_cache = odp_shm_addr(shm);
 
@@ -66,13 +70,15 @@ int create_ipsec_cache_entry(sa_db_entry_t *cipher_sa,
 	params.op = (in) ? ODP_CRYPTO_OP_DECODE : ODP_CRYPTO_OP_ENCODE;
 	params.auth_cipher_text = TRUE;
 	if (CRYPTO_API_SYNC == api_mode) {
-		params.pref_mode   = ODP_CRYPTO_SYNC;
+		params.op_mode = ODP_CRYPTO_SYNC;
 		params.compl_queue = ODP_QUEUE_INVALID;
 		params.output_pool = ODP_POOL_INVALID;
+		entry->async = FALSE;
 	} else {
-		params.pref_mode   = ODP_CRYPTO_ASYNC;
+		params.op_mode = ODP_CRYPTO_ASYNC;
 		params.compl_queue = completionq;
 		params.output_pool = out_pool;
+		entry->async = TRUE;
 	}
 
 	if (CRYPTO_API_ASYNC_NEW_BUFFER == api_mode)
@@ -86,13 +92,13 @@ int create_ipsec_cache_entry(sa_db_entry_t *cipher_sa,
 		params.cipher_alg  = cipher_sa->alg.u.cipher;
 		params.cipher_key.data  = cipher_sa->key.data;
 		params.cipher_key.length  = cipher_sa->key.length;
-		params.iv.data = entry->state.iv;
-		params.iv.length = cipher_sa->iv_len;
+		params.cipher_iv.data = entry->state.iv;
+		params.cipher_iv.length = cipher_sa->iv_len;
 		mode = cipher_sa->mode;
 	} else {
 		params.cipher_alg = ODP_CIPHER_ALG_NULL;
-		params.iv.data = NULL;
-		params.iv.length = 0;
+		params.cipher_iv.data = NULL;
+		params.cipher_iv.length = 0;
 	}
 
 	/* Auth */
@@ -107,10 +113,10 @@ int create_ipsec_cache_entry(sa_db_entry_t *cipher_sa,
 	}
 
 	/* Generate an IV */
-	if (params.iv.length) {
-		int32_t size = params.iv.length;
+	if (params.cipher_iv.length) {
+		int32_t size = params.cipher_iv.length;
 
-		int32_t ret = odp_random_data(params.iv.data, size, 1);
+		int32_t ret = odp_random_data(params.cipher_iv.data, size, 1);
 		if (ret != size)
 			return -1;
 	}

@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, Linaro Limited
+/* Copyright (c) 2014-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -22,17 +22,20 @@
 
 #include <odp/helper/odph_api.h>
 
-#define MAX_WORKERS            32    /* Max number of workers */
+/* Max number of workers */
+#define MAX_WORKERS            (ODP_THREAD_COUNT_MAX - 1)
 #define POOL_NUM_PKT           2048  /* Number of packets in packet pool */
 #define POOL_PKT_LEN           1856  /* Max packet length */
 #define DEFAULT_PKT_INTERVAL   1000  /* Interval between each packet */
 #define DEFAULT_UDP_TX_BURST	16
 #define MAX_UDP_TX_BURST	512
-#define MAX_RX_BURST		32
+#define DEFAULT_RX_BURST	32
+#define MAX_RX_BURST		512
 
 #define APPL_MODE_UDP    0			/**< UDP mode */
 #define APPL_MODE_PING   1			/**< ping mode */
 #define APPL_MODE_RCV    2			/**< receive mode */
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
 #define PING_THR_TX 0
 #define PING_THR_RX 1
@@ -53,6 +56,8 @@ typedef struct {
 	odp_pktio_config_t config;
 	odp_pktout_queue_t pktout[MAX_WORKERS];
 	unsigned pktout_count;
+	odp_pktin_queue_t pktin[MAX_WORKERS];
+	unsigned pktin_count;
 } interface_t;
 
 /**
@@ -70,7 +75,9 @@ typedef struct {
 	unsigned int srcip;	/**< src ip addr */
 	unsigned int dstip;	/**< dest ip addr */
 	uint16_t srcport;	/**< src udp port */
+	uint16_t srcport_end;	/**< src udp end port */
 	uint16_t dstport;	/**< dest udp port */
+	uint16_t dstport_end;	/**< dest udp end port */
 	int mode;		/**< work mode */
 	int number;		/**< packets number to be sent */
 	int payload;		/**< data len */
@@ -79,7 +86,10 @@ typedef struct {
 				     each packet */
 	int udp_tx_burst;	/**< number of udp packets to send with one
 				      API call */
+	int rx_burst;	/**< number of packets to receive with one
+				      API call */
 	odp_bool_t csum;	/**< use platform csum support if available */
+	odp_bool_t sched;	/**< use scheduler API to receive packets */
 } appl_args_t;
 
 /**
@@ -95,6 +105,17 @@ typedef struct {
 	uint64_t ctr_icmp_reply_rcv;	/**< icmp reply packets */
 } counters_t;
 
+/** UDP Packet processing function argument */
+typedef struct {
+	odp_bool_t multi_flow;
+	uint16_t srcport_crt;
+	uint16_t srcport_start;
+	uint16_t srcport_end;
+	uint16_t dstport_crt;
+	uint16_t dstport_start;
+	uint16_t dstport_end;
+} udp_args_t;
+
 /** * Thread specific arguments
  */
 typedef struct {
@@ -104,10 +125,10 @@ typedef struct {
 		struct {
 			odp_pktout_queue_t pktout; /**< Packet output queue */
 			odp_pktout_config_opt_t *pktout_cfg; /**< Packet output config*/
+			udp_args_t udp_param;  /**< UDP configuration */
 		} tx;
 		struct {
-			interface_t *ifs; /**< Interfaces array */
-			int ifs_count; /**< Interfaces array size */
+			odp_pktin_queue_t pktin; /**< Packet input queue */
 		} rx;
 	};
 	odp_pool_t pool;	/**< Pool for packet IO */
@@ -129,6 +150,7 @@ typedef struct {
 	/** Global arguments */
 	int thread_cnt;
 	int tx_burst_size;
+	int rx_burst_size;
 } args_t;
 
 /** Global pointer to args */
@@ -141,7 +163,7 @@ static odp_barrier_t barrier;
 typedef odp_packet_t (*setup_pkt_ref_fn_t)(odp_pool_t,
 					   odp_pktout_config_opt_t *);
 typedef int (*setup_pkt_fn_t)(odp_packet_t, odp_pktout_config_opt_t *,
-			      counters_t *);
+			      counters_t *, void *);
 
 /* helper funcs */
 static void parse_args(int argc, char *argv[], appl_args_t *appl_args);
@@ -259,12 +281,14 @@ static int setup_pkt_array(odp_pktout_config_opt_t *pktout_cfg,
 			   odp_packet_t *pkt_ref_array,
 			   odp_packet_t  *pkt_array,
 			   int pkt_array_size,
-			   setup_pkt_fn_t setup_pkt)
+			   setup_pkt_fn_t setup_pkt,
+			   void *setup_pkt_arg)
 {
 	int i;
 
 	for (i = 0; i < pkt_array_size; i++) {
-		if ((*setup_pkt)(pkt_ref_array[i], pktout_cfg, counters))
+		if ((*setup_pkt)(pkt_ref_array[i], pktout_cfg, counters,
+				 setup_pkt_arg))
 			break;
 
 		pkt_array[i] = odp_packet_ref_static(pkt_ref_array[i]);
@@ -354,11 +378,12 @@ static odp_packet_t setup_udp_pkt_ref(odp_pool_t pool,
  * @retval 0 on success, -1 on fail
  */
 static int setup_udp_pkt(odp_packet_t pkt, odp_pktout_config_opt_t *pktout_cfg,
-			 counters_t *counters)
+			 counters_t *counters, void *arg)
 {
 	char *buf;
 	odph_ipv4hdr_t *ip;
 	unsigned short seq;
+	udp_args_t *udp_arg = (udp_args_t *)arg;
 
 	buf = (char *)odp_packet_data(pkt);
 
@@ -369,7 +394,29 @@ static int setup_udp_pkt(odp_packet_t pkt, odp_pktout_config_opt_t *pktout_cfg,
 	ip->id = odp_cpu_to_be_16(seq);
 	if (!pktout_cfg->bit.ipv4_chksum) {
 		ip->chksum = 0;
-		ip->chksum = odph_chksum(ip, ODPH_IPV4HDR_LEN);
+		ip->chksum = ~odp_chksum_ones_comp16(ip, ODPH_IPV4HDR_LEN);
+	}
+
+	if (udp_arg->multi_flow) {
+		odph_udphdr_t *udp = (odph_udphdr_t *)(buf + ODPH_ETHHDR_LEN +
+						       ODPH_IPV4HDR_LEN);
+
+		if (udp_arg->srcport_start != udp_arg->srcport_end) {
+			udp->src_port = odp_cpu_to_be_16(udp_arg->srcport_crt);
+			if (udp_arg->srcport_crt >= udp_arg->srcport_end)
+				udp_arg->srcport_crt = udp_arg->srcport_start;
+			else
+				udp_arg->srcport_crt++;
+		}
+		if (udp_arg->dstport_start != udp_arg->dstport_end) {
+			udp->dst_port = odp_cpu_to_be_16(udp_arg->dstport_crt);
+			if (udp_arg->dstport_crt >= udp_arg->dstport_end)
+				udp_arg->dstport_crt = udp_arg->dstport_start;
+			else
+				udp_arg->dstport_crt++;
+		}
+
+		udp->chksum = 0;
 	}
 
 	if (pktout_cfg->bit.ipv4_chksum || pktout_cfg->bit.udp_chksum) {
@@ -425,7 +472,7 @@ static odp_packet_t setup_icmp_pkt_ref(odp_pool_t pool,
 	ip->ttl = 64;
 	ip->tot_len = odp_cpu_to_be_16(args->appl.payload + ODPH_ICMPHDR_LEN +
 				       ODPH_IPV4HDR_LEN);
-	ip->proto = ODPH_IPPROTO_ICMPv4;
+	ip->proto = ODPH_IPPROTO_ICMPV4;
 	ip->id = 0;
 	ip->chksum = 0;
 
@@ -451,7 +498,7 @@ static odp_packet_t setup_icmp_pkt_ref(odp_pool_t pool,
  */
 static int setup_icmp_pkt(odp_packet_t pkt,
 			  odp_pktout_config_opt_t *pktout_cfg,
-			  counters_t *counters)
+			  counters_t *counters, void *arg ODP_UNUSED)
 {
 	char *buf;
 	odph_ipv4hdr_t *ip;
@@ -469,7 +516,7 @@ static int setup_icmp_pkt(odp_packet_t pkt,
 	ip->id = odp_cpu_to_be_16(seq);
 	if (!pktout_cfg->bit.ipv4_chksum) {
 		ip->chksum = 0;
-		ip->chksum = odph_chksum(ip, ODPH_IPV4HDR_LEN);
+		ip->chksum = ~odp_chksum_ones_comp16(ip, ODPH_IPV4HDR_LEN);
 	}
 
 	/* icmp */
@@ -482,7 +529,8 @@ static int setup_icmp_pkt(odp_packet_t pkt,
 	memcpy(tval_d, &tval, sizeof(uint64_t));
 
 	icmp->chksum = 0;
-	icmp->chksum = odph_chksum(icmp, args->appl.payload + ODPH_ICMPHDR_LEN);
+	icmp->chksum = ~odp_chksum_ones_comp16(icmp, args->appl.payload +
+					       ODPH_ICMPHDR_LEN);
 
 	if (pktout_cfg->bit.ipv4_chksum) {
 		odp_packet_l2_offset_set(pkt, 0);
@@ -513,10 +561,15 @@ static int create_pktio(const char *dev, odp_pool_t pool,
 	odp_pktio_param_t pktio_param;
 	odp_pktin_queue_param_t pktin_param;
 	odp_pktout_queue_param_t pktout_param;
-	odp_pktio_op_mode_t pktout_mode;
+	odp_pktio_op_mode_t pktout_mode, pktin_mode;
+	odp_bool_t sched = args->appl.sched;
 
 	odp_pktio_param_init(&pktio_param);
-	pktio_param.in_mode = ODP_PKTIN_MODE_SCHED;
+	pktio_param.in_mode = num_rx_queues ?
+		(sched ? ODP_PKTIN_MODE_SCHED : ODP_PKTIN_MODE_DIRECT) :
+		ODP_PKTIN_MODE_DISABLED;
+	pktio_param.out_mode = num_tx_queues ? ODP_PKTOUT_MODE_DIRECT :
+		ODP_PKTOUT_MODE_DISABLED;
 
 	/* Open a packet IO instance */
 	itf->pktio = odp_pktio_open(dev, pool, &pktio_param);
@@ -542,6 +595,10 @@ static int create_pktio(const char *dev, odp_pool_t pool,
 		itf->config.pktin.bit.drop_udp_err =
 			capa.config.pktin.bit.drop_udp_err;
 
+		itf->config.pktout.bit.ipv4_chksum_ena =
+			capa.config.pktout.bit.ipv4_chksum_ena;
+		itf->config.pktout.bit.udp_chksum_ena =
+			capa.config.pktout.bit.udp_chksum_ena;
 		itf->config.pktout.bit.ipv4_chksum =
 			capa.config.pktout.bit.ipv4_chksum;
 		itf->config.pktout.bit.udp_chksum =
@@ -549,9 +606,17 @@ static int create_pktio(const char *dev, odp_pool_t pool,
 	} else { /* explicit disable */
 		itf->config.pktin.bit.ipv4_chksum = 0;
 		itf->config.pktin.bit.udp_chksum = 0;
+		itf->config.pktout.bit.ipv4_chksum_ena = 0;
+		itf->config.pktout.bit.udp_chksum_ena = 0;
 		itf->config.pktout.bit.ipv4_chksum = 0;
 		itf->config.pktout.bit.udp_chksum = 0;
 	}
+
+	itf->config.parser.layer = ODP_PROTO_LAYER_L2;
+	if (itf->config.pktin.bit.udp_chksum)
+		itf->config.parser.layer = ODP_PROTO_LAYER_L4;
+	else if (itf->config.pktin.bit.ipv4_chksum)
+		itf->config.parser.layer = ODP_PROTO_LAYER_L3;
 
 	if (odp_pktio_config(itf->pktio, &itf->config)) {
 		EXAMPLE_ERR("Error: Failed to set interface configuration %s\n",
@@ -559,31 +624,47 @@ static int create_pktio(const char *dev, odp_pool_t pool,
 		return -1;
 	}
 
-	if (num_rx_queues > capa.max_input_queues)
-		num_rx_queues = capa.max_input_queues;
+	if (num_rx_queues) {
+		pktin_mode = ODP_PKTIO_OP_MT_UNSAFE;
+		if (num_rx_queues > capa.max_input_queues) {
+			num_rx_queues = capa.max_input_queues;
+			pktin_mode = ODP_PKTIO_OP_MT;
+			EXAMPLE_DBG("Warning: Force RX multithread safe mode "
+				    "(slower)on %s\n",	dev);
+		}
 
-	odp_pktin_queue_param_init(&pktin_param);
-	pktin_param.num_queues = num_rx_queues;
-	pktin_param.queue_param.sched.sync = ODP_SCHED_SYNC_ATOMIC;
+		odp_pktin_queue_param_init(&pktin_param);
+		pktin_param.num_queues = num_rx_queues;
+		pktin_param.op_mode = pktin_mode;
+		if (sched)
+			pktin_param.queue_param.sched.sync =
+				ODP_SCHED_SYNC_ATOMIC;
 
-	if (odp_pktin_queue_config(itf->pktio, &pktin_param)) {
-		EXAMPLE_ERR("Error: pktin queue config failed for %s\n", dev);
-		return -1;
+		if (odp_pktin_queue_config(itf->pktio, &pktin_param)) {
+			EXAMPLE_ERR("Error: pktin queue config failed "
+				    "for %s\n", dev);
+			return -1;
+		}
 	}
 
-	pktout_mode = ODP_PKTIO_OP_MT_UNSAFE;
-	if (num_tx_queues > capa.max_output_queues) {
-		num_tx_queues = capa.max_output_queues;
-		pktout_mode = ODP_PKTIO_OP_MT;
-	}
+	if (num_tx_queues) {
+		pktout_mode = ODP_PKTIO_OP_MT_UNSAFE;
+		if (num_tx_queues > capa.max_output_queues) {
+			num_tx_queues = capa.max_output_queues;
+			pktout_mode = ODP_PKTIO_OP_MT;
+			EXAMPLE_DBG("Warning: Force TX multithread safe mode "
+				    "(slower) on %s\n", dev);
+		}
 
-	odp_pktout_queue_param_init(&pktout_param);
-	pktout_param.num_queues = num_tx_queues;
-	pktout_param.op_mode = pktout_mode;
+		odp_pktout_queue_param_init(&pktout_param);
+		pktout_param.num_queues = num_tx_queues;
+		pktout_param.op_mode = pktout_mode;
 
-	if (odp_pktout_queue_config(itf->pktio, &pktout_param)) {
-		EXAMPLE_ERR("Error: pktout queue config failed for %s\n", dev);
-		return -1;
+		if (odp_pktout_queue_config(itf->pktio, &pktout_param)) {
+			EXAMPLE_ERR("Error: pktout queue config failed for %s\n",
+				    dev);
+			return -1;
+		}
 	}
 
 	ret = odp_pktio_start(itf->pktio);
@@ -591,9 +672,18 @@ static int create_pktio(const char *dev, odp_pool_t pool,
 		EXAMPLE_ABORT("Error: unable to start %s\n", dev);
 
 	itf->pktout_count = num_tx_queues;
-	if (odp_pktout_queue(itf->pktio, itf->pktout, itf->pktout_count) !=
-			     (int)itf->pktout_count) {
+	if (itf->pktout_count &&
+	    odp_pktout_queue(itf->pktio, itf->pktout, itf->pktout_count) !=
+	    (int)itf->pktout_count) {
 		EXAMPLE_ERR("Error: failed to get output queues for %s\n", dev);
+		return -1;
+	}
+
+	itf->pktin_count = num_rx_queues;
+	if (!sched && itf->pktin_count &&
+	    odp_pktin_queue(itf->pktio, itf->pktin, itf->pktin_count) !=
+	    (int)itf->pktin_count) {
+		EXAMPLE_ERR("Error: failed to get input queues for %s\n", dev);
 		return -1;
 	}
 
@@ -626,6 +716,7 @@ static int gen_send_thread(void *arg)
 	int burst_start, burst_size;
 	setup_pkt_ref_fn_t setup_pkt_ref = NULL;
 	setup_pkt_fn_t setup_pkt = NULL;
+	void *setup_pkt_arg = NULL;
 	counters_t *counters;
 	uint64_t pkt_count_max = 0;
 
@@ -643,6 +734,7 @@ static int gen_send_thread(void *arg)
 		if (args->appl.number != -1)
 			pkt_count_max = args->appl.number / args->thread_cnt +
 				(args->appl.number % args->thread_cnt ? 1 : 0);
+		setup_pkt_arg = &thr_args->tx.udp_param;
 	} else if (args->appl.mode == APPL_MODE_PING) {
 		setup_pkt_ref = setup_icmp_pkt_ref;
 		setup_pkt = setup_icmp_pkt;
@@ -680,7 +772,7 @@ static int gen_send_thread(void *arg)
 		/* Setup TX burst*/
 		if (setup_pkt_array(pktout_cfg, counters,
 				    pkt_ref_array, pkt_array,
-				    pkt_array_size, setup_pkt)) {
+				    pkt_array_size, setup_pkt, setup_pkt_arg)) {
 			EXAMPLE_ERR("[%02i] Error: failed to setup packets\n",
 				    thr);
 			break;
@@ -731,18 +823,18 @@ static int gen_send_thread(void *arg)
 /**
  * Process icmp packets
  *
+ * @param  thr worker id
+ * @param  thr_args worker argument
  * @param  icmp icmp header address
- * @param  msg output buffer
  */
 
-static void process_icmp_pkt(thread_args_t *thr_args,
-			     odph_icmphdr_t *icmp, char *msg)
+static void process_icmp_pkt(int thr, thread_args_t *thr_args,
+			     uint8_t *_icmp)
 {
 	uint64_t trecv;
 	uint64_t tsend;
 	uint64_t rtt_ms, rtt_us;
-
-	msg[0] = 0;
+	odph_icmphdr_t *icmp = (odph_icmphdr_t *)_icmp;
 
 	if (icmp->type == ICMP_ECHOREPLY) {
 		thr_args->counters.ctr_icmp_reply_rcv++;
@@ -753,62 +845,73 @@ static void process_icmp_pkt(thread_args_t *thr_args,
 		rtt_ms = (trecv - tsend) / ODP_TIME_MSEC_IN_NS;
 		rtt_us = (trecv - tsend) / ODP_TIME_USEC_IN_NS -
 				1000 * rtt_ms;
-		sprintf(msg,
-			"ICMP Echo Reply seq %d time %"
-			PRIu64 ".%.03" PRIu64" ms",
+		printf("  [%02i] ICMP Echo Reply seq %d time %"
+			PRIu64 ".%.03" PRIu64" ms\n", thr,
 			odp_be_to_cpu_16(icmp->un.echo.sequence),
 			rtt_ms, rtt_us);
 	} else if (icmp->type == ICMP_ECHO) {
-		sprintf(msg, "Icmp Echo Request");
+		printf("  [%02i] ICMP Echo Request\n", thr);
 	}
 }
 
 /**
- * Print odp packets
+ * Process odp packets
  *
  * @param  thr worker id
+ * @param  thr_args worker argument
  * @param  pkt_tbl packets to be print
  * @param  len packet number
  */
-static void print_pkts(int thr, thread_args_t *thr_args,
-		       odp_packet_t pkt_tbl[], unsigned len)
+static void process_pkts(int thr, thread_args_t *thr_args,
+			 odp_packet_t pkt_tbl[], unsigned len)
 {
 	odp_packet_t pkt;
-	char *buf;
+	uint32_t left, offset, i;
 	odph_ipv4hdr_t *ip;
-	odph_icmphdr_t *icmp;
-	unsigned i;
-	size_t offset;
-	char msg[1024];
 
 	for (i = 0; i < len; ++i) {
 		pkt = pkt_tbl[i];
 
+		/* Drop packets with errors */
+		if (odp_unlikely(odp_packet_has_error(pkt)))
+			continue;
+
+		offset = odp_packet_l3_offset(pkt);
+		left = odp_packet_len(pkt) - offset;
+
+		if (left < sizeof(odph_ipv4hdr_t))
+			continue;
+
+		ip = (odph_ipv4hdr_t *)((uint8_t *)odp_packet_data(pkt) +
+					offset);
+
 		/* only ip pkts */
-		if (!odp_packet_has_ipv4(pkt))
+		if (ODPH_IPV4HDR_VER(ip->ver_ihl) != ODPH_IPV4)
 			continue;
 
 		thr_args->counters.ctr_pkt_rcv++;
-		buf = odp_packet_data(pkt);
-		ip = (odph_ipv4hdr_t *)(buf + odp_packet_l3_offset(pkt));
-		offset = odp_packet_l4_offset(pkt);
 
 		/* udp */
-		if (ip->proto == ODPH_IPPROTO_UDP)
+		if (ip->proto == ODPH_IPPROTO_UDP) {
 			thr_args->counters.ctr_udp_rcv++;
+		} else if (ip->proto == ODPH_IPPROTO_ICMPV4) {
+			uint32_t l3_size = ODPH_IPV4HDR_IHL(ip->ver_ihl) * 4;
 
-		/* icmp */
-		if (ip->proto == ODPH_IPPROTO_ICMPv4) {
-			icmp = (odph_icmphdr_t *)(buf + offset);
+			offset += l3_size;
+			left -=  l3_size;
 
-			process_icmp_pkt(thr_args, icmp, msg);
-			printf("  [%02i] %s\n", thr, msg);
+			if (left < sizeof(odph_icmphdr_t))
+				continue;
+
+			process_icmp_pkt(thr, thr_args,
+					 (uint8_t *)odp_packet_data(pkt) +
+					 offset);
 		}
 	}
 }
 
 /**
- * Main receive function
+ * Scheduler receive function
  *
  * @param arg  thread arguments of type 'thread_args_t *'
  */
@@ -816,16 +919,16 @@ static int gen_recv_thread(void *arg)
 {
 	int thr;
 	thread_args_t *thr_args;
-	odp_packet_t pkts[MAX_RX_BURST], pkt;
-	odp_event_t events[MAX_RX_BURST];
+	odp_packet_t pkts[MAX_RX_BURST];
+	odp_event_t events[MAX_RX_BURST], ev;
 	int pkt_cnt, ev_cnt, i;
-	interface_t *itfs, *itf;
+	int burst_size;
 
 	thr = odp_thread_id();
 	thr_args = (thread_args_t *)arg;
-	itfs = thr_args->rx.ifs;
+	burst_size = args->rx_burst_size;
 
-	printf("  [%02i] created mode: RECEIVE\n", thr);
+	printf("  [%02i] created mode: RECEIVE SCHEDULER\n", thr);
 	odp_barrier_wait(&barrier);
 
 	for (;;) {
@@ -834,39 +937,65 @@ static int gen_recv_thread(void *arg)
 
 		/* Use schedule to get buf from any input queue */
 		ev_cnt = odp_schedule_multi(NULL, ODP_SCHED_NO_WAIT,
-					    events, MAX_RX_BURST);
+					    events, burst_size);
 		if (ev_cnt == 0)
 			continue;
+
 		for (i = 0, pkt_cnt = 0; i < ev_cnt; i++) {
-			pkt = odp_packet_from_event(events[i]);
-			itf = &itfs[odp_pktio_index(odp_packet_input(pkt))];
+			ev = events[i];
 
-			if (odp_packet_has_ipv4(pkt)) {
-				if (itf->config.pktin.bit.ipv4_chksum) {
-					if (odp_packet_has_l3_error(pkt))
-						printf("HW detected L3 error\n");
-				}
-			}
-
-			if (odp_packet_has_udp(pkt)) {
-				if (itf->config.pktin.bit.udp_chksum) {
-					if (odp_packet_has_l4_error(pkt))
-						printf("HW detected L4 error\n");
-				}
-			}
-
-			/* Drop packets with errors */
-			if (odp_unlikely(odp_packet_has_error(pkt))) {
-				odp_packet_free(pkt);
-				continue;
-			}
-			pkts[pkt_cnt++] = pkt;
+			if (odp_event_type(ev) == ODP_EVENT_PACKET)
+				pkts[pkt_cnt++] = odp_packet_from_event(ev);
+			else
+				odp_event_free(ev);
 		}
 
 		if (pkt_cnt) {
-			print_pkts(thr, thr_args, pkts, pkt_cnt);
+			process_pkts(thr, thr_args, pkts, pkt_cnt);
 
 			odp_packet_free_multi(pkts, pkt_cnt);
+		}
+	}
+
+	return 0;
+}
+
+/**
+ * Direct receive function
+ *
+ * @param arg  thread arguments of type 'thread_args_t *'
+ */
+static int gen_recv_direct_thread(void *arg)
+{
+	int thr;
+	thread_args_t *thr_args;
+	odp_packet_t pkts[MAX_RX_BURST];
+	int pkt_cnt, burst_size;
+	odp_pktin_queue_t pktin;
+	uint64_t wait = odp_pktin_wait_time(ODP_TIME_SEC_IN_NS);
+
+	thr = odp_thread_id();
+	thr_args = (thread_args_t *)arg;
+	pktin = thr_args->rx.pktin;
+	burst_size = args->rx_burst_size;
+
+	printf("  [%02i] created mode: RECEIVE\n", thr);
+	odp_barrier_wait(&barrier);
+
+	for (;;) {
+		if (thr_args->stop)
+			break;
+
+		pkt_cnt = odp_pktin_recv_tmo(pktin, pkts, burst_size, wait);
+
+		if (pkt_cnt > 0) {
+			process_pkts(thr, thr_args, pkts, pkt_cnt);
+
+			odp_packet_free_multi(pkts, pkt_cnt);
+		} else if (pkt_cnt == 0) {
+			continue;
+		} else {
+			break;
 		}
 	}
 
@@ -1011,6 +1140,7 @@ int main(int argc, char *argv[])
 	interface_t *ifs;
 	odp_instance_t instance;
 	odph_odpthread_params_t thr_params;
+	odp_timer_capability_t timer_capa;
 
 	/* Init ODP before calling anything else */
 	if (odp_init_global(&instance, NULL, NULL)) {
@@ -1040,9 +1170,7 @@ int main(int argc, char *argv[])
 	/* Print both system and application information */
 	print_info(NO_PATH(argv[0]), &args->appl);
 
-	/* Default to max number of workers, unless user specified number of
-	 * workers or cpumask */
-	num_workers = MAX_WORKERS;
+	num_workers = 1;
 	num_workers = odp_cpumask_default_worker(&cpumask, num_workers);
 
 	if (args->appl.num_workers) {
@@ -1074,12 +1202,16 @@ int main(int argc, char *argv[])
 	args->thread_cnt = num_workers;
 
 	/* Burst size */
-	if (args->appl.mode == APPL_MODE_PING)
+	if (args->appl.mode == APPL_MODE_PING) {
 		args->tx_burst_size = 1;
-	else if (args->appl.mode == APPL_MODE_UDP)
+		args->rx_burst_size = 1;
+	} else if (args->appl.mode == APPL_MODE_UDP) {
 		args->tx_burst_size = args->appl.udp_tx_burst;
-	else
+		args->rx_burst_size = 0;
+	} else {
 		args->tx_burst_size = 0;
+		args->rx_burst_size = args->appl.rx_burst;
+	}
 
 	/* Create packet pool */
 	odp_pool_param_init(&params);
@@ -1097,7 +1229,12 @@ int main(int argc, char *argv[])
 	odp_pool_print(pool);
 
 	/* Create timer pool */
-	tparams.res_ns = 1 * ODP_TIME_MSEC_IN_NS;
+	if (odp_timer_capability(ODP_CLOCK_CPU, &timer_capa)) {
+		EXAMPLE_ERR("Error: get timer capacity failed.\n");
+		exit(EXIT_FAILURE);
+	}
+	tparams.res_ns = MAX(1 * ODP_TIME_MSEC_IN_NS,
+			     timer_capa.highest_res_ns);
 	tparams.min_tmo = 0;
 	tparams.max_tmo = 10000 * ODP_TIME_SEC_IN_NS;
 	tparams.num_timers = num_workers; /* One timer per worker */
@@ -1123,28 +1260,29 @@ int main(int argc, char *argv[])
 
 	ifs = malloc(sizeof(interface_t) * args->appl.if_count);
 
-	if (args->appl.mode == APPL_MODE_PING ||
-	    args->appl.mode == APPL_MODE_UDP)
-		num_rx_queues = 1;
-	else
-		num_rx_queues = num_workers;
+	for (i = 0; i < args->appl.if_count; ++i) {
+		if (args->appl.mode == APPL_MODE_PING) {
+			num_rx_queues = 1;
+			num_tx_queues = 1;
+		} else if (args->appl.mode == APPL_MODE_UDP) {
+			num_rx_queues = 0;
+			num_tx_queues = num_workers / args->appl.if_count;
+			if (i < num_workers % args->appl.if_count)
+				num_tx_queues++;
+		} else { /* APPL_MODE_RCV*/
+			num_rx_queues = num_workers / args->appl.if_count;
+			if (i < num_workers % args->appl.if_count)
+				num_rx_queues++;
+			num_tx_queues = 0;
+		}
 
-	if (args->appl.mode == APPL_MODE_PING ||
-	    args->appl.mode == APPL_MODE_RCV)
-		num_tx_queues = 1;
-	else {
-		num_tx_queues = num_workers / args->appl.if_count;
-		if (num_workers % args->appl.if_count)
-			num_tx_queues++;
-	}
-
-	for (i = 0; i < args->appl.if_count; ++i)
 		if (create_pktio(args->appl.if_names[i], pool, num_rx_queues,
 				 num_tx_queues, &ifs[i])) {
 			EXAMPLE_ERR("Error: create interface %s failed.\n",
 				    args->appl.if_names[i]);
 			exit(EXIT_FAILURE);
 		}
+	}
 
 	/* Create and init worker threads */
 	memset(thread_tbl, 0, sizeof(thread_tbl));
@@ -1172,8 +1310,8 @@ int main(int argc, char *argv[])
 			abort();
 		}
 		thr_args = &args->thread[PING_THR_RX];
-		thr_args->rx.ifs = ifs;
-		thr_args->rx.ifs_count = args->appl.if_count;
+		if (!args->appl.sched)
+			thr_args->rx.pktin = ifs[0].pktin[0];
 		thr_args->pool = pool;
 		thr_args->tp = tp;
 		thr_args->tq = tq;
@@ -1190,7 +1328,10 @@ int main(int argc, char *argv[])
 		thr_args->mode = args->appl.mode;
 
 		memset(&thr_params, 0, sizeof(thr_params));
-		thr_params.start    = gen_recv_thread;
+		if (args->appl.sched)
+			thr_params.start = gen_recv_thread;
+		else
+			thr_params.start = gen_recv_direct_thread;
 		thr_params.arg      = thr_args;
 		thr_params.thr_type = ODP_THREAD_WORKER;
 		thr_params.instance = instance;
@@ -1232,27 +1373,59 @@ int main(int argc, char *argv[])
 
 	} else {
 		int cpu = odp_cpumask_first(&cpumask);
+		udp_args_t *udp_param = NULL;
+		uint16_t sport_range = args->appl.srcport_end -
+			args->appl.srcport + 1;
+		uint16_t dport_range = args->appl.dstport_end -
+			args->appl.dstport + 1;
+		float sport_step = (float)(sport_range) / num_workers;
+		float dport_step = (float)(dport_range) / num_workers;
+		odp_bool_t multi_flow = false;
+
+		if (sport_range > 1 || dport_range > 1)
+			multi_flow = true;
 
 		for (i = 0; i < num_workers; ++i) {
 			odp_cpumask_t thd_mask;
 			int (*thr_run_func)(void *);
-			int if_idx, pktout_idx;
+			int if_idx, pktq_idx;
 			uint64_t start_seq;
 
+			if_idx = i % args->appl.if_count;
+
 			if (args->appl.mode == APPL_MODE_RCV) {
-				args->thread[i].rx.ifs = ifs;
-				args->thread[i].rx.ifs_count =
-					args->appl.if_count;
+				pktq_idx = (i / args->appl.if_count) %
+					ifs[if_idx].pktin_count;
+				if (!args->appl.sched)
+					args->thread[i].rx.pktin =
+						ifs[if_idx].pktin[pktq_idx];
 			} else {
-				if_idx = i % args->appl.if_count;
-				pktout_idx = (i / args->appl.if_count) %
+				udp_param = &args->thread[i].tx.udp_param;
+
+				pktq_idx = (i / args->appl.if_count) %
 					ifs[if_idx].pktout_count;
 				start_seq = i * args->tx_burst_size;
 
 				args->thread[i].tx.pktout =
-					ifs[if_idx].pktout[pktout_idx];
+					ifs[if_idx].pktout[pktq_idx];
 				args->thread[i].tx.pktout_cfg =
 					&ifs[if_idx].config.pktout;
+
+				udp_param->multi_flow = multi_flow;
+				udp_param->srcport_start = args->appl.srcport;
+				udp_param->srcport_end = args->appl.srcport_end;
+				udp_param->srcport_crt = args->appl.srcport;
+				if (sport_range > 1)
+					udp_param->srcport_crt +=
+						(uint16_t)(i * sport_step);
+
+				udp_param->dstport_start = args->appl.dstport;
+				udp_param->dstport_end = args->appl.dstport_end;
+				udp_param->dstport_crt = args->appl.dstport;
+				if (dport_range > 1)
+					udp_param->dstport_crt +=
+						(uint16_t)(i * dport_step);
+
 				args->thread[i].counters.ctr_seq = start_seq;
 			}
 			tq = odp_queue_create("", NULL);
@@ -1278,7 +1451,10 @@ int main(int argc, char *argv[])
 			if (args->appl.mode == APPL_MODE_UDP) {
 				thr_run_func = gen_send_thread;
 			} else if (args->appl.mode == APPL_MODE_RCV) {
-				thr_run_func = gen_recv_thread;
+				if (args->appl.sched)
+					thr_run_func = gen_recv_thread;
+				else
+					thr_run_func = gen_recv_direct_thread;
 			} else {
 				EXAMPLE_ERR("ERR MODE\n");
 				exit(EXIT_FAILURE);
@@ -1368,7 +1544,9 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		{"srcip", required_argument, NULL, 's'},
 		{"dstip", required_argument, NULL, 'd'},
 		{"srcport", required_argument, NULL, 'e'},
+		{"srcport_end", required_argument, NULL, 'j'},
 		{"dstport", required_argument, NULL, 'f'},
+		{"dstport_end", required_argument, NULL, 'k'},
 		{"packetsize", required_argument, NULL, 'p'},
 		{"mode", required_argument, NULL, 'm'},
 		{"count", required_argument, NULL, 'n'},
@@ -1376,14 +1554,17 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		{"interval", required_argument, NULL, 'i'},
 		{"help", no_argument, NULL, 'h'},
 		{"udp_tx_burst", required_argument, NULL, 'x'},
+		{"rx_burst", required_argument, NULL, 'r'},
 		{"csum", no_argument, NULL, 'y'},
+		{"sched", no_argument, NULL, 'z'},
 		{NULL, 0, NULL, 0}
 	};
 
-	static const char *shortopts = "+I:a:b:s:d:p:i:m:n:t:w:c:x:he:f:y";
+	static const char *shortopts = "+I:a:b:s:d:p:i:m:n:t:w:c:x:he:j:f:k"
+					":yr:z";
 
 	/* let helper collect its own arguments (e.g. --odph_proc) */
-	odph_parse_options(argc, argv, shortopts, longopts);
+	argc = odph_parse_options(argc, argv);
 
 	appl_args->mode = -1; /* Invalid, must be changed by parsing */
 	appl_args->number = -1;
@@ -1391,11 +1572,14 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 	appl_args->timeout = -1;
 	appl_args->interval = DEFAULT_PKT_INTERVAL;
 	appl_args->udp_tx_burst = DEFAULT_UDP_TX_BURST;
+	appl_args->rx_burst = DEFAULT_RX_BURST;
 	appl_args->srcport = 0;
+	appl_args->srcport_end = 0;
 	appl_args->dstport = 0;
+	appl_args->dstport_end = 0;
 	appl_args->csum = 0;
-
-	opterr = 0; /* do not issue errors on helper options */
+	appl_args->sched = 0;
+	appl_args->num_workers = -1;
 
 	while (1) {
 		opt = getopt_long(argc, argv, shortopts, longopts, &long_index);
@@ -1412,9 +1596,11 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 			num_workers = odp_cpumask_default_worker(&cpumask, 0);
 			odp_cpumask_and(&cpumask_and, &cpumask_args, &cpumask);
 			if (odp_cpumask_count(&cpumask_and) <
-			    odp_cpumask_count(&cpumask_args)) {
+			    odp_cpumask_count(&cpumask_args) ||
+			    odp_cpumask_count(&cpumask_args) > MAX_WORKERS) {
 				EXAMPLE_ERR("Wrong cpu mask, max cpu's:%d\n",
-					    num_workers);
+					    num_workers < MAX_WORKERS ?
+					    num_workers : MAX_WORKERS);
 				exit(EXIT_FAILURE);
 			}
 			break;
@@ -1503,8 +1689,14 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		case 'e':
 			appl_args->srcport = (unsigned short)atoi(optarg);
 			break;
+		case 'j':
+			appl_args->srcport_end = (unsigned short)atoi(optarg);
+			break;
 		case 'f':
 			appl_args->dstport = (unsigned short)atoi(optarg);
+			break;
+		case 'k':
+			appl_args->dstport_end = (unsigned short)atoi(optarg);
 			break;
 		case 'p':
 			appl_args->payload = atoi(optarg);
@@ -1533,9 +1725,20 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 				exit(EXIT_FAILURE);
 			}
 			break;
+		case 'r':
+			appl_args->rx_burst = atoi(optarg);
+			if (appl_args->rx_burst >  MAX_RX_BURST) {
+				EXAMPLE_ERR("wrong Rx burst size (max %d)\n",
+					    MAX_RX_BURST);
+				exit(EXIT_FAILURE);
+			}
+			break;
 
 		case 'y':
 			appl_args->csum = 1;
+			break;
+		case 'z':
+			appl_args->sched = 1;
 			break;
 		case 'h':
 			usage(argv[0]);
@@ -1547,10 +1750,24 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		}
 	}
 
+	if (appl_args->num_workers < 0)
+		appl_args->num_workers = 0;
+	else if (appl_args->num_workers == 0 ||
+		 appl_args->num_workers > MAX_WORKERS)
+		appl_args->num_workers =  MAX_WORKERS;
+
 	if (appl_args->if_count == 0 || appl_args->mode == -1) {
 		usage(argv[0]);
 		exit(EXIT_FAILURE);
 	}
+
+	if ((appl_args->srcport != 0 && appl_args->srcport_end == 0) ||
+	    (appl_args->srcport_end < appl_args->srcport))
+		appl_args->srcport_end = appl_args->srcport;
+
+	if ((appl_args->dstport != 0 && appl_args->dstport_end == 0) ||
+	    (appl_args->dstport_end < appl_args->dstport))
+		appl_args->dstport_end = appl_args->dstport;
 
 	optind = 1;		/* reset 'extern optind' from the getopt lib */
 }
@@ -1612,19 +1829,28 @@ static void usage(char *progname)
 	       "\n"
 	       "Optional OPTIONS\n"
 	       "  -h, --help       Display help and exit.\n"
-	       "  -e, --srcport src udp port\n"
-	       "  -f, --dstport dst udp port\n"
+	       "  -e, --srcport udp source port start value\n"
+	       "                 default is 0\n"
+	       "  -j, --srcport_end udp source port end value\n"
+	       "                 default is udp source port start value\n"
+	       "  -f, --dstport udp destination port start value\n"
+	       "                 default is 0\n"
+	       "  -k, --dstport_end udp destination port end value\n"
+	       "                 default is udp destination port start value\n"
 	       "  -p, --packetsize payload length of the packets\n"
 	       "  -t, --timeout only for ping mode, wait ICMP reply timeout seconds\n"
 	       "  -i, --interval wait interval ms between sending each packet\n"
 	       "                 default is 1000ms. 0 for flood mode\n"
 	       "  -w, --workers specify number of workers need to be assigned to application\n"
-	       "	         default is to assign all\n"
+	       "	         default is 1, 0 for all available\n"
 	       "  -n, --count the number of packets to be send\n"
 	       "  -c, --cpumask to set on cores\n"
 	       "  -x, --udp_tx_burst size of UDP TX burst\n"
+	       "  -r, --rx_burst size of RX burst\n"
 	       "  -y, --csum use platform checksum support if available\n"
 	       "	         default is disabled\n"
+	       "  -z, --sched use scheduler API to receive packets\n"
+	       "                 default is direct mode API\n"
 	       "\n", NO_PATH(progname), NO_PATH(progname)
 	      );
 }

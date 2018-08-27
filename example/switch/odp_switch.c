@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, Linaro Limited
+/* Copyright (c) 2016-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -14,7 +14,7 @@
 #include <odp/helper/odph_api.h>
 
 /** Maximum number of worker threads */
-#define MAX_WORKERS            32
+#define MAX_WORKERS            (ODP_THREAD_COUNT_MAX - 1)
 
 /** Size of the shared memory block */
 #define SHM_PKT_POOL_SIZE      8192
@@ -52,7 +52,7 @@ typedef union {
  * Parsed command line application arguments
  */
 typedef struct {
-	int cpu_count;	   /**< Number of CPUs to be used */
+	unsigned int cpu_count; /**< Number of CPUs to be used */
 	unsigned if_count; /**< Number of interfaces to be used */
 	int num_workers;   /**< Number of worker threads */
 	char **if_names;   /**< Array of pointers to interface names */
@@ -66,7 +66,7 @@ static int exit_threads;   /**< Break workers loop if set to 1 */
 /**
  * Statistics
  */
-typedef union {
+typedef union ODP_ALIGNED_CACHE {
 	struct {
 		/** Number of received packets */
 		uint64_t rx_packets;
@@ -79,7 +79,7 @@ typedef union {
 	} s;
 
 	uint8_t padding[ODP_CACHE_LINE_SIZE];
-} stats_t ODP_ALIGNED_CACHE;
+} stats_t;
 
 /**
  * Packet buffer
@@ -240,7 +240,7 @@ static int create_pktio(const char *dev, int idx, int num_rx, int num_tx,
 	}
 
 	odp_pktio_config_init(&config);
-	config.parser.layer = ODP_PKTIO_PARSER_LAYER_L2;
+	config.parser.layer = ODP_PROTO_LAYER_L2;
 	odp_pktio_config(pktio, &config);
 
 	odp_pktin_queue_param_init(&pktin_param);
@@ -725,7 +725,7 @@ static void usage(char *progname)
 	       "                  Interface count min 2, max %i\n"
 	       "\n"
 	       "Optional OPTIONS:\n"
-	       "  -c, --count <number> CPU count.\n"
+	       "  -c, --count <number> CPU count, 0=all available, default=1\n"
 	       "  -t, --time  <number> Time in seconds to run.\n"
 	       "  -a, --accuracy <number> Statistics print interval in seconds\n"
 	       "                          (default is 10 second).\n"
@@ -760,12 +760,11 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 	static const char *shortopts = "+c:+t:+a:i:h";
 
 	/* let helper collect its own arguments (e.g. --odph_proc) */
-	odph_parse_options(argc, argv, shortopts, longopts);
+	argc = odph_parse_options(argc, argv);
 
+	appl_args->cpu_count = 1; /* use one worker by default */
 	appl_args->time = 0; /* loop forever if time to run is 0 */
 	appl_args->accuracy = 10; /* get and print pps stats second */
-
-	opterr = 0; /* do not issue errors on helper options */
 
 	while (1) {
 		opt = getopt_long(argc, argv, shortopts, longopts, &long_index);
@@ -918,9 +917,8 @@ int main(int argc, char **argv)
 	/* Print both system and application information */
 	print_info(NO_PATH(argv[0]), &gbl_args->appl);
 
-	/* Default to system CPU count unless user specified */
 	num_workers = MAX_WORKERS;
-	if (gbl_args->appl.cpu_count)
+	if (gbl_args->appl.cpu_count && gbl_args->appl.cpu_count < MAX_WORKERS)
 		num_workers = gbl_args->appl.cpu_count;
 
 	/* Get default worker cpumask */

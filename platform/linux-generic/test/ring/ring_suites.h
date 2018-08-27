@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, Linaro Limited
+/* Copyright (c) 2016-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -18,7 +18,6 @@ int ring_test_basic_end(void);
 void ring_test_basic_create(void);
 void ring_test_basic_burst(void);
 void ring_test_basic_bulk(void);
-void ring_test_basic_watermark(void);
 
 /* test suite start and stop */
 int ring_test_stress_start(void);

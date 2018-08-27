@@ -3,13 +3,16 @@ include ../Makefile.inc
 SRC    = users-guide.adoc \
 	 users-guide-cls.adoc \
 	 users-guide-crypto.adoc \
+	 users-guide-ipsec.adoc \
 	 users-guide-packet.adoc \
 	 users-guide-pktio.adoc \
 	 users-guide-timer.adoc \
-	 users-guide-tm.adoc
+	 users-guide-tm.adoc \
+	 users-guide-utilities-examples.adoc
 TARGET = users-guide.html
 IMAGES = $(IMAGES_DIR)/overview.svg \
 	 $(IMAGES_DIR)/atomic_queue.svg \
+	 $(IMAGES_DIR)/ipsec_sa_states.svg \
 	 $(IMAGES_DIR)/odp_components.svg \
 	 $(IMAGES_DIR)/ODP-Logo-HQ.svg \
 	 $(IMAGES_DIR)/odp_rx_processing.svg \
@@ -30,9 +33,17 @@ IMAGES = $(IMAGES_DIR)/overview.svg \
 	 $(IMAGES_DIR)/pktio_fsm.svg \
 	 $(IMAGES_DIR)/pktout_direct_send.svg \
 	 $(IMAGES_DIR)/pktout_queue_send.svg \
+	 $(IMAGES_DIR)/ref.svg \
+	 $(IMAGES_DIR)/refpkt1.svg \
+	 $(IMAGES_DIR)/refpkt2.svg \
+	 $(IMAGES_DIR)/refpktmulti.svg \
+	 $(IMAGES_DIR)/refpktsingle.svg \
+	 $(IMAGES_DIR)/refstatic.svg \
 	 $(IMAGES_DIR)/release_git.svg \
 	 $(IMAGES_DIR)/segment.svg \
 	 $(IMAGES_DIR)/simple_release_git.svg \
+	 $(IMAGES_DIR)/ipsec-lookaside.svg \
+	 $(IMAGES_DIR)/ipsec-inline.svg \
 	 $(IMAGES_DIR)/timeout_fsm.svg \
 	 $(IMAGES_DIR)/timer_fsm.svg \
 	 $(IMAGES_DIR)/tm_hierarchy.svg \
@@ -44,6 +55,7 @@ IMAGES += $(IMAGES_DIR)/resource_management.svg
 endif
 
 IMAGES_SRCS = \
+	 $(IMAGES_DIR)/ipsec_sa_states.msc \
 	 $(IMAGES_DIR)/pktio_fsm.gv \
 	 $(IMAGES_DIR)/resource_management.msc \
 	 $(IMAGES_DIR)/timeout_fsm.gv \

@@ -1,6 +1,6 @@
 /* Copyright 2015 EZchip Semiconductor Ltd. All Rights Reserved.
  *
- * Copyright (c) 2015, Linaro Limited
+ * Copyright (c) 2015-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier: BSD-3-Clause
@@ -26,16 +26,12 @@ extern "C" {
 #include <odp_timer_wheel_internal.h>
 #include <odp_pkt_queue_internal.h>
 #include <odp_sorted_list_internal.h>
-#include <odp_internal.h>
 #include <odp_debug_internal.h>
 #include <odp_buffer_internal.h>
 #include <odp_queue_if.h>
 #include <odp_packet_internal.h>
 
 typedef struct stat  file_stat_t;
-
-#define MAX(a, b) (((a) > (b)) ? (a) : (b))
-#define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
 #define INPUT_WORK_RING_SIZE  (16 * 1024)
 
@@ -286,7 +282,7 @@ struct tm_queue_obj_s {
 	uint8_t tm_idx;
 	uint8_t delayed_cnt;
 	uint8_t blocked_cnt;
-	queue_t tm_qentry;
+	odp_queue_t queue;
 };
 
 struct tm_node_obj_s {

@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, Linaro Limited
+/* Copyright (c) 2014-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -6,13 +6,32 @@
 
 #include "config.h"
 
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <odp_api.h>
 #include "odp_cunit_common.h"
+#include "test_debug.h"
 #include <odp/helper/odph_api.h>
+
+#include <CUnit/TestDB.h>
+
+#if defined __GNUC__ && (((__GNUC__ == 4) && \
+			(__GNUC_MINOR__ >= 4)) || (__GNUC__ > 4))
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstrict-prototypes"
+#endif
+#include <CUnit/Automated.h>
+#if defined __GNUC__ && (((__GNUC__ == 4) && \
+			(__GNUC_MINOR__ >= 4)) || (__GNUC__ > 4))
+#pragma GCC diagnostic pop
+#endif
+
 /* Globals */
+static int allow_skip_result;
 static odph_odpthread_t thread_tbl[MAX_WORKERS];
 static odp_instance_t instance;
+static char *progname;
 
 /*
  * global init/term functions which may be registered
@@ -109,8 +128,8 @@ static odp_suiteinfo_t *cunit_get_suite_info(const char *suite_name)
 {
 	odp_suiteinfo_t *sinfo;
 
-	for (sinfo = global_testsuites; sinfo->pName; sinfo++)
-		if (strcmp(sinfo->pName, suite_name) == 0)
+	for (sinfo = global_testsuites; sinfo->name; sinfo++)
+		if (strcmp(sinfo->name, suite_name) == 0)
 			return sinfo;
 
 	return NULL;
@@ -121,8 +140,8 @@ static odp_testinfo_t *cunit_get_test_info(odp_suiteinfo_t *sinfo,
 {
 	odp_testinfo_t *tinfo;
 
-	for (tinfo = sinfo->pTests; tinfo->pName; tinfo++)
-		if (strcmp(tinfo->pName, test_name) == 0)
+	for (tinfo = sinfo->testinfo_tbl; tinfo->name; tinfo++)
+		if (strcmp(tinfo->name, test_name) == 0)
 				return tinfo;
 
 	return NULL;
@@ -150,14 +169,14 @@ static int _cunit_suite_init(void)
 		return -1;
 
 	/* execute its init function */
-	if (sinfo->pInitFunc) {
-		ret = sinfo->pInitFunc();
+	if (sinfo->init_func) {
+		ret = sinfo->init_func();
 		if (ret)
 			return ret;
 	}
 
 	/* run any configured conditional checks and mark inactive tests */
-	for (tinfo = sinfo->pTests; tinfo->pName; tinfo++) {
+	for (tinfo = sinfo->testinfo_tbl; tinfo->name; tinfo++) {
 		CU_pTest ptest;
 		CU_ErrorCode err;
 
@@ -165,7 +184,7 @@ static int _cunit_suite_init(void)
 			continue;
 
 		/* test is inactive, mark it as such */
-		ptest = CU_get_test_by_name(tinfo->pName, cur_suite);
+		ptest = CU_get_test_by_name(tinfo->name, cur_suite);
 		if (ptest)
 			err = CU_set_test_active(ptest, CU_FALSE);
 		else
@@ -173,7 +192,7 @@ static int _cunit_suite_init(void)
 
 		if (err != CUE_SUCCESS) {
 			fprintf(stderr, "%s: failed to set test %s inactive\n",
-				__func__, tinfo->pName);
+				__func__, tinfo->name);
 			return -1;
 		}
 	}
@@ -194,15 +213,15 @@ static int cunit_register_suites(odp_suiteinfo_t testsuites[])
 	CU_pSuite suite;
 	CU_pTest test;
 
-	for (sinfo = testsuites; sinfo->pName; sinfo++) {
-		suite = CU_add_suite(sinfo->pName,
-				     _cunit_suite_init, sinfo->pCleanupFunc);
+	for (sinfo = testsuites; sinfo->name; sinfo++) {
+		suite = CU_add_suite(sinfo->name,
+				     _cunit_suite_init, sinfo->term_func);
 		if (!suite)
 			return CU_get_error();
 
-		for (tinfo = sinfo->pTests; tinfo->pName; tinfo++) {
-			test = CU_add_test(suite, tinfo->pName,
-					   tinfo->pTestFunc);
+		for (tinfo = sinfo->testinfo_tbl; tinfo->name; tinfo++) {
+			test = CU_add_test(suite, tinfo->name,
+					   tinfo->test_func);
 			if (!test)
 				return CU_get_error();
 		}
@@ -218,7 +237,7 @@ static int cunit_update_test(CU_pSuite suite,
 	CU_pTest test = NULL;
 	CU_ErrorCode err;
 	odp_testinfo_t *tinfo;
-	const char *test_name = updated_tinfo->pName;
+	const char *test_name = updated_tinfo->name;
 
 	tinfo = cunit_get_test_info(sinfo, test_name);
 	if (tinfo)
@@ -230,7 +249,7 @@ static int cunit_update_test(CU_pSuite suite,
 		return -1;
 	}
 
-	err = CU_set_test_func(test, updated_tinfo->pTestFunc);
+	err = CU_set_test_func(test, updated_tinfo->test_func);
 	if (err != CUE_SUCCESS) {
 		fprintf(stderr, "%s: failed to update test func for %s\n",
 			__func__, test_name);
@@ -250,31 +269,31 @@ static int cunit_update_suite(odp_suiteinfo_t *updated_sinfo)
 	odp_testinfo_t *tinfo;
 
 	/* find previously registered suite with matching name */
-	sinfo = cunit_get_suite_info(updated_sinfo->pName);
+	sinfo = cunit_get_suite_info(updated_sinfo->name);
 
 	if (sinfo) {
 		/* lookup the associated CUnit suite */
-		suite = CU_get_suite_by_name(updated_sinfo->pName,
+		suite = CU_get_suite_by_name(updated_sinfo->name,
 					     CU_get_registry());
 	}
 
 	if (!sinfo || !suite) {
 		fprintf(stderr, "%s: unable to find existing suite named %s\n",
-			__func__, updated_sinfo->pName);
+			__func__, updated_sinfo->name);
 		return -1;
 	}
 
-	sinfo->pInitFunc = updated_sinfo->pInitFunc;
-	sinfo->pCleanupFunc = updated_sinfo->pCleanupFunc;
+	sinfo->init_func = updated_sinfo->init_func;
+	sinfo->term_func = updated_sinfo->term_func;
 
-	err = CU_set_suite_cleanupfunc(suite, updated_sinfo->pCleanupFunc);
+	err = CU_set_suite_cleanupfunc(suite, updated_sinfo->term_func);
 	if (err != CUE_SUCCESS) {
 		fprintf(stderr, "%s: failed to update cleanup func for %s\n",
-			__func__, updated_sinfo->pName);
+			__func__, updated_sinfo->name);
 		return -1;
 	}
 
-	for (tinfo = updated_sinfo->pTests; tinfo->pName; tinfo++) {
+	for (tinfo = updated_sinfo->testinfo_tbl; tinfo->name; tinfo++) {
 		int ret;
 
 		ret = cunit_update_test(suite, sinfo, tinfo);
@@ -296,8 +315,13 @@ int odp_cunit_run(void)
 	printf("\tODP implementation name:    %s\n", odp_version_impl_name());
 	printf("\tODP implementation version: %s\n", odp_version_impl_str());
 
-	CU_basic_set_mode(CU_BRM_VERBOSE);
-	CU_basic_run_tests();
+	if (getenv("ODP_TEST_OUT_XML")) {
+		CU_set_output_filename(progname);
+		CU_automated_run_tests();
+	} else {
+		CU_basic_set_mode(CU_BRM_VERBOSE);
+		CU_basic_run_tests();
+	}
 
 	ret = CU_get_number_of_failure_records();
 
@@ -323,7 +347,7 @@ int odp_cunit_update(odp_suiteinfo_t testsuites[])
 	int ret = 0;
 	odp_suiteinfo_t *sinfo;
 
-	for (sinfo = testsuites; sinfo->pName && ret == 0; sinfo++)
+	for (sinfo = testsuites; sinfo->name && ret == 0; sinfo++)
 		ret = cunit_update_suite(sinfo);
 
 	return ret;
@@ -371,5 +395,21 @@ int odp_cunit_register(odp_suiteinfo_t testsuites[])
  */
 int odp_cunit_parse_options(int argc, char *argv[])
 {
-	return odph_parse_options(argc, argv, NULL, NULL);
+	const char *env = getenv("CI");
+
+	progname = argv[0];
+	odph_parse_options(argc, argv);
+
+	if (env && !strcmp(env, "true")) {
+		allow_skip_result = 1;
+		LOG_DBG("\nWARNING: test result can be used for code coverage only.\n"
+			"CI=true env variable is set!\n");
+	}
+
+	return 0;
+}
+
+int odp_cunit_ret(int val)
+{
+	return allow_skip_result ? 0 : val;
 }

@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, Linaro Limited
+/* Copyright (c) 2014-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:	BSD-3-Clause
@@ -10,7 +10,7 @@
 
 #include <odp_api.h>
 #include <odp_cunit_common.h>
-#include "packet.h"
+#include <test_packet_parser.h>
 
 /* Reserve some tailroom for tests */
 #define PACKET_TAILROOM_RESERVE  4
@@ -21,6 +21,9 @@
 ODP_STATIC_ASSERT(PACKET_POOL_NUM_SEG > 1 &&
 		  PACKET_POOL_NUM_SEG < PACKET_POOL_NUM,
 		  "Invalid PACKET_POOL_NUM_SEG value");
+
+/* Number of packets in parse test */
+#define PARSE_TEST_NUM_PKT 10
 
 static odp_pool_t packet_pool, packet_pool_no_uarea, packet_pool_double_uarea;
 static uint32_t packet_len;
@@ -38,6 +41,36 @@ static struct udata_struct {
 	123456,
 	789912,
 	"abcdefg",
+};
+
+static struct {
+	odp_pool_t          pool;
+	odp_proto_chksums_t all_chksums;
+	uint32_t            offset_zero[PARSE_TEST_NUM_PKT];
+} parse_test;
+
+static uint32_t parse_test_pkt_len[] = {
+	sizeof(test_packet_arp),
+	sizeof(test_packet_ipv4_icmp),
+	sizeof(test_packet_ipv4_tcp),
+	sizeof(test_packet_ipv4_udp),
+	sizeof(test_packet_vlan_ipv4_udp),
+	sizeof(test_packet_vlan_qinq_ipv4_udp),
+	sizeof(test_packet_ipv6_icmp),
+	sizeof(test_packet_ipv6_tcp),
+	sizeof(test_packet_ipv6_udp),
+	sizeof(test_packet_vlan_ipv6_udp),
+	sizeof(test_packet_ipv4_sctp),
+	sizeof(test_packet_ipv4_ipsec_ah),
+	sizeof(test_packet_ipv4_ipsec_esp),
+	sizeof(test_packet_ipv6_ipsec_ah),
+	sizeof(test_packet_ipv6_ipsec_esp),
+	sizeof(test_packet_mcast_eth_ipv4_udp),
+	sizeof(test_packet_bcast_eth_ipv4_udp),
+	sizeof(test_packet_mcast_eth_ipv6_udp),
+	sizeof(test_packet_ipv4_udp_first_frag),
+	sizeof(test_packet_ipv4_udp_last_frag),
+	sizeof(test_packet_ipv4_rr_nop_icmp)
 };
 
 #define packet_compare_offset(pkt1, off1, pkt2, off2, len) \
@@ -109,7 +142,7 @@ static int fill_data_backward(odp_packet_t pkt, uint32_t offset, uint32_t len,
 	return odp_packet_copy_from_mem(pkt, offset, len, buf);
 }
 
-int packet_suite_init(void)
+static int packet_suite_init(void)
 {
 	odp_pool_param_t params;
 	odp_pool_capability_t capa;
@@ -242,7 +275,7 @@ int packet_suite_init(void)
 	return 0;
 }
 
-int packet_suite_term(void)
+static int packet_suite_term(void)
 {
 	odp_packet_free(test_packet);
 	odp_packet_free(segmented_test_packet);
@@ -255,12 +288,13 @@ int packet_suite_term(void)
 	return 0;
 }
 
-void packet_test_alloc_free(void)
+static void packet_test_alloc_free(void)
 {
 	odp_pool_t pool;
 	odp_packet_t packet;
 	odp_pool_param_t params;
 	odp_pool_capability_t capa;
+	odp_event_subtype_t subtype;
 
 	CU_ASSERT_FATAL(odp_pool_capability(&capa) == 0);
 
@@ -279,9 +313,17 @@ void packet_test_alloc_free(void)
 	CU_ASSERT_FATAL(packet != ODP_PACKET_INVALID);
 	CU_ASSERT(odp_packet_len(packet) == packet_len);
 	CU_ASSERT(odp_event_type(odp_packet_to_event(packet)) ==
-			ODP_EVENT_PACKET);
+		  ODP_EVENT_PACKET);
+	CU_ASSERT(odp_event_subtype(odp_packet_to_event(packet)) ==
+		  ODP_EVENT_PACKET_BASIC);
+	CU_ASSERT(odp_event_types(odp_packet_to_event(packet), &subtype) ==
+		  ODP_EVENT_PACKET);
+	CU_ASSERT(subtype == ODP_EVENT_PACKET_BASIC);
 	CU_ASSERT(odp_packet_to_u64(packet) !=
 		  odp_packet_to_u64(ODP_PACKET_INVALID));
+
+	/* User pointer should be NULL after alloc */
+	CU_ASSERT(odp_packet_user_ptr(packet) == NULL);
 
 	/* Pool should have only one packet */
 	CU_ASSERT_FATAL(odp_packet_alloc(pool, packet_len)
@@ -316,7 +358,7 @@ static int packet_alloc_multi(odp_pool_t pool, uint32_t pkt_len,
 	return total;
 }
 
-void packet_test_alloc_free_multi(void)
+static void packet_test_alloc_free_multi(void)
 {
 	const int num_pkt = 2;
 	odp_pool_t pool[2];
@@ -349,11 +391,22 @@ void packet_test_alloc_free_multi(void)
 	CU_ASSERT_FATAL(ret == num_pkt);
 
 	for (i = 0; i < 2 * num_pkt; ++i) {
+		odp_event_subtype_t subtype;
+
 		CU_ASSERT(odp_packet_len(packet[i]) == packet_len);
 		CU_ASSERT(odp_event_type(odp_packet_to_event(packet[i])) ==
 			  ODP_EVENT_PACKET);
+		CU_ASSERT(odp_event_subtype(odp_packet_to_event(packet[i])) ==
+			  ODP_EVENT_PACKET_BASIC);
+		CU_ASSERT(odp_event_types(odp_packet_to_event(packet[i]),
+					  &subtype) ==
+			  ODP_EVENT_PACKET);
+		CU_ASSERT(subtype == ODP_EVENT_PACKET_BASIC);
 		CU_ASSERT(odp_packet_to_u64(packet[i]) !=
 			  odp_packet_to_u64(ODP_PACKET_INVALID));
+
+		/* User pointer should be NULL after alloc */
+		CU_ASSERT(odp_packet_user_ptr(packet[i]) == NULL);
 	}
 
 	/* Pools should have no more packets */
@@ -381,7 +434,51 @@ void packet_test_alloc_free_multi(void)
 	CU_ASSERT(odp_pool_destroy(pool[1]) == 0);
 }
 
-void packet_test_alloc_segmented(void)
+static void packet_test_free_sp(void)
+{
+	const int num_pkt = 10;
+	odp_pool_t pool;
+	int i, ret;
+	odp_packet_t packet[num_pkt];
+	odp_pool_param_t params;
+	odp_pool_capability_t capa;
+	uint32_t len = packet_len;
+
+	CU_ASSERT_FATAL(odp_pool_capability(&capa) == 0);
+
+	if (capa.pkt.max_len < len)
+		len = capa.pkt.max_len;
+
+	odp_pool_param_init(&params);
+
+	params.type           = ODP_POOL_PACKET;
+	params.pkt.len        = len;
+	params.pkt.num        = num_pkt;
+
+	pool = odp_pool_create("packet_pool_free_sp", &params);
+	CU_ASSERT_FATAL(pool != ODP_POOL_INVALID);
+
+	ret = packet_alloc_multi(pool, len, packet, num_pkt);
+	CU_ASSERT_FATAL(ret == num_pkt);
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT_FATAL(packet[i] != ODP_PACKET_INVALID);
+		CU_ASSERT(odp_packet_len(packet[i]) == len);
+	}
+	odp_packet_free_sp(packet, num_pkt);
+
+	/* Check that all the packets were returned back to the pool */
+	ret = packet_alloc_multi(pool, len, packet, num_pkt);
+	CU_ASSERT_FATAL(ret == num_pkt);
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT_FATAL(packet[i] != ODP_PACKET_INVALID);
+		CU_ASSERT(odp_packet_len(packet[i]) == len);
+	}
+	odp_packet_free_sp(packet, num_pkt);
+
+	CU_ASSERT(odp_pool_destroy(pool) == 0);
+}
+
+static void packet_test_alloc_segmented(void)
 {
 	const int num = 5;
 	odp_packet_t pkts[num];
@@ -464,26 +561,50 @@ void packet_test_alloc_segmented(void)
 	CU_ASSERT(odp_pool_destroy(pool) == 0);
 }
 
-void packet_test_event_conversion(void)
+static void packet_test_event_conversion(void)
 {
-	odp_packet_t pkt = test_packet;
+	odp_packet_t pkt0 = test_packet;
+	odp_packet_t pkt1 = segmented_test_packet;
 	odp_packet_t tmp_pkt;
-	odp_event_t ev;
+	odp_event_t event;
+	odp_event_subtype_t subtype;
+	odp_packet_t pkt[2] = {pkt0, pkt1};
+	odp_event_t ev[2];
+	int i;
 
-	ev = odp_packet_to_event(pkt);
-	CU_ASSERT_FATAL(ev != ODP_EVENT_INVALID);
-	CU_ASSERT(odp_event_type(ev) == ODP_EVENT_PACKET);
+	event = odp_packet_to_event(pkt0);
+	CU_ASSERT_FATAL(event != ODP_EVENT_INVALID);
+	CU_ASSERT(odp_event_type(event) == ODP_EVENT_PACKET);
+	CU_ASSERT(odp_event_subtype(event) == ODP_EVENT_PACKET_BASIC);
+	CU_ASSERT(odp_event_types(event, &subtype) ==
+		  ODP_EVENT_PACKET);
+	CU_ASSERT(subtype == ODP_EVENT_PACKET_BASIC);
 
-	tmp_pkt = odp_packet_from_event(ev);
+	tmp_pkt = odp_packet_from_event(event);
 	CU_ASSERT_FATAL(tmp_pkt != ODP_PACKET_INVALID);
-	CU_ASSERT(tmp_pkt == pkt);
-	packet_compare_data(tmp_pkt, pkt);
+	CU_ASSERT(tmp_pkt == pkt0);
+	packet_compare_data(tmp_pkt, pkt0);
+
+	odp_packet_to_event_multi(pkt, ev, 2);
+
+	for (i = 0; i < 2; i++) {
+		CU_ASSERT_FATAL(ev[i] != ODP_EVENT_INVALID);
+		CU_ASSERT(odp_event_type(ev[i]) == ODP_EVENT_PACKET);
+		CU_ASSERT(odp_event_subtype(ev[i]) == ODP_EVENT_PACKET_BASIC);
+	}
+
+	odp_packet_from_event_multi(pkt, ev, 2);
+	CU_ASSERT(pkt[0] == pkt0);
+	CU_ASSERT(pkt[1] == pkt1);
+	packet_compare_data(pkt[0], pkt0);
+	packet_compare_data(pkt[1], pkt1);
 }
 
-void packet_test_basic_metadata(void)
+static void packet_test_basic_metadata(void)
 {
 	odp_packet_t pkt = test_packet;
 	odp_time_t ts;
+	odp_packet_data_range_t range;
 
 	CU_ASSERT_PTR_NOT_NULL(odp_packet_head(pkt));
 	CU_ASSERT_PTR_NOT_NULL(odp_packet_data(pkt));
@@ -492,6 +613,11 @@ void packet_test_basic_metadata(void)
 	/* Packet was allocated by application so shouldn't have valid pktio. */
 	CU_ASSERT(odp_packet_input(pkt) == ODP_PKTIO_INVALID);
 	CU_ASSERT(odp_packet_input_index(pkt) < 0);
+
+	/* Packet was not received from a packet IO, shouldn't have ones
+	 * complement calculated. */
+	odp_packet_ones_comp(pkt, &range);
+	CU_ASSERT(range.length == 0);
 
 	odp_packet_flow_hash_set(pkt, UINT32_MAX);
 	CU_ASSERT(odp_packet_has_flow_hash(pkt));
@@ -507,10 +633,11 @@ void packet_test_basic_metadata(void)
 	CU_ASSERT(!odp_packet_has_ts(pkt));
 }
 
-void packet_test_length(void)
+static void packet_test_length(void)
 {
 	odp_packet_t pkt = test_packet;
-	uint32_t buf_len, headroom, tailroom;
+	uint32_t buf_len, headroom, tailroom, seg_len;
+	void *data;
 	odp_pool_capability_t capa;
 
 	CU_ASSERT_FATAL(odp_pool_capability(&capa) == 0);
@@ -518,21 +645,26 @@ void packet_test_length(void)
 	buf_len = odp_packet_buf_len(pkt);
 	headroom = odp_packet_headroom(pkt);
 	tailroom = odp_packet_tailroom(pkt);
+	data     = odp_packet_data(pkt);
 
+	CU_ASSERT(data != NULL);
 	CU_ASSERT(odp_packet_len(pkt) == packet_len);
+	CU_ASSERT(odp_packet_seg_len(pkt) <= packet_len);
+	CU_ASSERT(odp_packet_data_seg_len(pkt, &seg_len) == data);
+	CU_ASSERT(seg_len == odp_packet_seg_len(pkt));
 	CU_ASSERT(headroom >= capa.pkt.min_headroom);
 	CU_ASSERT(tailroom >= capa.pkt.min_tailroom);
 
 	CU_ASSERT(buf_len >= packet_len + headroom + tailroom);
 }
 
-void packet_test_prefetch(void)
+static void packet_test_prefetch(void)
 {
 	odp_packet_prefetch(test_packet, 0, odp_packet_len(test_packet));
 	CU_PASS();
 }
 
-void packet_test_debug(void)
+static void packet_test_debug(void)
 {
 	CU_ASSERT(odp_packet_is_valid(test_packet) == 1);
 	printf("\n\n");
@@ -541,7 +673,7 @@ void packet_test_debug(void)
 	odp_packet_print_data(test_packet, 14, 20);
 }
 
-void packet_test_context(void)
+static void packet_test_context(void)
 {
 	odp_packet_t pkt = test_packet;
 	char ptr_test_value = 2;
@@ -560,10 +692,18 @@ void packet_test_context(void)
 	CU_ASSERT(memcmp(udat, &test_packet_udata, sizeof(struct udata_struct))
 		  == 0);
 
+	odp_packet_user_ptr_set(pkt, NULL);
+	CU_ASSERT(odp_packet_user_ptr(pkt) == NULL);
+	odp_packet_user_ptr_set(pkt, (void *)0xdead);
+	CU_ASSERT(odp_packet_user_ptr(pkt) == (void *)0xdead);
+
 	odp_packet_reset(pkt, packet_len);
+
+	/* User pointer should be NULL after reset */
+	CU_ASSERT(odp_packet_user_ptr(pkt) == NULL);
 }
 
-void packet_test_layer_offsets(void)
+static void packet_test_layer_offsets(void)
 {
 	odp_packet_t pkt = test_packet;
 	uint8_t *l2_addr, *l3_addr, *l4_addr;
@@ -666,7 +806,7 @@ static void _verify_headroom_shift(odp_packet_t *pkt,
 	CU_ASSERT(odp_packet_data(*pkt) == data);
 }
 
-void packet_test_headroom(void)
+static void packet_test_headroom(void)
 {
 	odp_packet_t pkt = odp_packet_copy(test_packet,
 					   odp_packet_pool(test_packet));
@@ -786,7 +926,7 @@ static void _verify_tailroom_shift(odp_packet_t *pkt,
 	}
 }
 
-void packet_test_tailroom(void)
+static void packet_test_tailroom(void)
 {
 	odp_packet_t pkt = odp_packet_copy(test_packet,
 					   odp_packet_pool(test_packet));
@@ -827,7 +967,7 @@ void packet_test_tailroom(void)
 	odp_packet_free(pkt);
 }
 
-void packet_test_segments(void)
+static void packet_test_segments(void)
 {
 	int num_segs, seg_index;
 	uint32_t data_len;
@@ -912,7 +1052,7 @@ void packet_test_segments(void)
 		CU_ASSERT(seg == ODP_PACKET_SEG_INVALID);
 }
 
-void packet_test_segment_last(void)
+static void packet_test_segment_last(void)
 {
 	odp_packet_t pkt = test_packet;
 	odp_packet_seg_t seg;
@@ -932,7 +1072,7 @@ do { \
 	CU_ASSERT(odp_packet_has_##flag(packet) != 0);    \
 } while (0)
 
-void packet_test_in_flags(void)
+static void packet_test_in_flags(void)
 {
 	odp_packet_t pkt = test_packet;
 
@@ -959,7 +1099,7 @@ void packet_test_in_flags(void)
 	TEST_INFLAG(pkt, icmp);
 }
 
-void packet_test_error_flags(void)
+static void packet_test_error_flags(void)
 {
 	odp_packet_t pkt = test_packet;
 	int err;
@@ -989,7 +1129,7 @@ struct packet_metadata {
 	uint64_t usr_u64;
 };
 
-void packet_test_add_rem_data(void)
+static void packet_test_add_rem_data(void)
 {
 	odp_packet_t pkt, new_pkt;
 	uint32_t pkt_len, offset, add_len;
@@ -1154,7 +1294,7 @@ static void _packet_compare_offset(odp_packet_t pkt1, uint32_t off1,
 	}
 }
 
-void packet_test_copy(void)
+static void packet_test_copy(void)
 {
 	odp_packet_t pkt;
 	odp_packet_t pkt_copy, pkt_part;
@@ -1256,7 +1396,7 @@ void packet_test_copy(void)
 	odp_packet_free(pkt);
 }
 
-void packet_test_copydata(void)
+static void packet_test_copydata(void)
 {
 	odp_packet_t pkt = test_packet;
 	uint32_t pkt_len = odp_packet_len(pkt);
@@ -1315,7 +1455,7 @@ void packet_test_copydata(void)
 	odp_packet_free(pkt);
 }
 
-void packet_test_concatsplit(void)
+static void packet_test_concatsplit(void)
 {
 	odp_packet_t pkt, pkt2;
 	uint32_t pkt_len;
@@ -1388,7 +1528,7 @@ void packet_test_concatsplit(void)
 	odp_packet_free(pkt);
 }
 
-void packet_test_concat_small(void)
+static void packet_test_concat_small(void)
 {
 	odp_pool_capability_t capa;
 	odp_pool_t pool;
@@ -1451,7 +1591,7 @@ void packet_test_concat_small(void)
 	CU_ASSERT(odp_pool_destroy(pool) == 0);
 }
 
-void packet_test_concat_extend_trunc(void)
+static void packet_test_concat_extend_trunc(void)
 {
 	odp_pool_capability_t capa;
 	odp_pool_t pool;
@@ -1539,7 +1679,7 @@ void packet_test_concat_extend_trunc(void)
 	CU_ASSERT(odp_pool_destroy(pool) == 0);
 }
 
-void packet_test_extend_small(void)
+static void packet_test_extend_small(void)
 {
 	odp_pool_capability_t capa;
 	odp_pool_t pool;
@@ -1631,7 +1771,7 @@ void packet_test_extend_small(void)
 	CU_ASSERT(odp_pool_destroy(pool) == 0);
 }
 
-void packet_test_extend_large(void)
+static void packet_test_extend_large(void)
 {
 	odp_pool_capability_t capa;
 	odp_pool_t pool;
@@ -1751,7 +1891,7 @@ void packet_test_extend_large(void)
 	CU_ASSERT(odp_pool_destroy(pool) == 0);
 }
 
-void packet_test_extend_mix(void)
+static void packet_test_extend_mix(void)
 {
 	odp_pool_capability_t capa;
 	odp_pool_t pool;
@@ -1865,7 +2005,7 @@ void packet_test_extend_mix(void)
 	CU_ASSERT(odp_pool_destroy(pool) == 0);
 }
 
-void packet_test_extend_ref(void)
+static void packet_test_extend_ref(void)
 {
 	odp_packet_t max_pkt, ref;
 	uint32_t hr, tr, max_len;
@@ -1939,7 +2079,7 @@ void packet_test_extend_ref(void)
 	odp_packet_free(max_pkt);
 }
 
-void packet_test_align(void)
+static void packet_test_align(void)
 {
 	odp_packet_t pkt;
 	uint32_t pkt_len, seg_len, offset, aligned_seglen;
@@ -1997,7 +2137,7 @@ void packet_test_align(void)
 	odp_packet_free(pkt);
 }
 
-void packet_test_offset(void)
+static void packet_test_offset(void)
 {
 	odp_packet_t pkt = test_packet;
 	uint32_t seg_len, full_seg_len;
@@ -2043,7 +2183,7 @@ void packet_test_offset(void)
 	CU_ASSERT_PTR_NOT_NULL(ptr);
 }
 
-void packet_test_ref(void)
+static void packet_test_ref(void)
 {
 	odp_packet_t base_pkt, segmented_base_pkt, hdr_pkt[4],
 		ref_pkt[4], refhdr_pkt[4], hdr_cpy;
@@ -2354,7 +2494,7 @@ void packet_test_ref(void)
 	ref_pkt[0] = odp_packet_ref(base_pkt, offset[0]);
 	CU_ASSERT_FATAL(ref_pkt[0] != ODP_PACKET_INVALID);
 	ref_len[0] = odp_packet_len(ref_pkt[0]);
-	CU_ASSERT(ref_len[0] = odp_packet_len(base_pkt) - offset[0]);
+	CU_ASSERT(ref_len[0] == odp_packet_len(base_pkt) - offset[0]);
 
 	CU_ASSERT(odp_packet_push_head(base_pkt,
 				       base_hr - base_hr / 2) != NULL);
@@ -2371,9 +2511,803 @@ void packet_test_ref(void)
 	odp_packet_free(ref_pkt[1]);
 }
 
+static int packet_parse_suite_init(void)
+{
+	int num_test_pkt, i;
+	uint32_t max_len;
+	odp_pool_param_t param;
+
+	num_test_pkt = sizeof(parse_test_pkt_len) / sizeof(uint32_t);
+	max_len = 0;
+
+	for (i = 0; i < num_test_pkt; i++) {
+		if (max_len < parse_test_pkt_len[i])
+			max_len = parse_test_pkt_len[i];
+	}
+
+	odp_pool_param_init(&param);
+
+	param.type           = ODP_POOL_PACKET;
+	param.pkt.seg_len    = max_len;
+	param.pkt.len        = max_len;
+	param.pkt.num        = 100;
+
+	parse_test.pool = odp_pool_create("parse_test_pool", &param);
+
+	if (parse_test.pool == ODP_POOL_INVALID)
+		return -1;
+
+	parse_test.all_chksums.all_chksum  = 0;
+	parse_test.all_chksums.chksum.ipv4 = 1;
+	parse_test.all_chksums.chksum.udp  = 1;
+	parse_test.all_chksums.chksum.tcp  = 1;
+	parse_test.all_chksums.chksum.sctp = 1;
+
+	for (i = 0; i < PARSE_TEST_NUM_PKT; i++)
+		parse_test.offset_zero[i] = 0;
+
+	return 0;
+}
+
+static int packet_parse_suite_term(void)
+{
+	if (odp_pool_destroy(parse_test.pool))
+		return -1;
+
+	return 0;
+}
+
+static void parse_test_alloc(odp_packet_t pkt[], const uint8_t test_packet[],
+			     uint32_t len)
+{
+	int ret, i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+
+	ret = odp_packet_alloc_multi(parse_test.pool, len, pkt, num_pkt);
+	CU_ASSERT_FATAL(ret == num_pkt);
+
+	for (i = 0; i < num_pkt; i++) {
+		ret = odp_packet_copy_from_mem(pkt[i], 0, len, test_packet);
+		CU_ASSERT_FATAL(ret == 0);
+	}
+}
+
+/* Ethernet/IPv4/UDP */
+static void parse_eth_ipv4_udp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	odp_packet_chksum_status_t chksum_status;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv4_udp,
+			 sizeof(test_packet_ipv4_udp));
+
+	for (i = 0; i < num_pkt; i++) {
+		chksum_status = odp_packet_l3_chksum_status(pkt[i]);
+		CU_ASSERT(chksum_status == ODP_PACKET_CHKSUM_UNKNOWN);
+		chksum_status = odp_packet_l4_chksum_status(pkt[i]);
+		CU_ASSERT(chksum_status == ODP_PACKET_CHKSUM_UNKNOWN);
+	}
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_ALL;
+	parse.chksums = parse_test.all_chksums;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(odp_packet_has_udp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT_EQUAL(odp_packet_l2_type(pkt[i]),
+				ODP_PROTO_L2_TYPE_ETH);
+		CU_ASSERT_EQUAL(odp_packet_l3_type(pkt[i]),
+				ODP_PROTO_L3_TYPE_IPV4);
+		CU_ASSERT_EQUAL(odp_packet_l4_type(pkt[i]),
+				ODP_PROTO_L4_TYPE_UDP);
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* IPv4/UDP */
+static void parse_ipv4_udp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+	uint32_t offset[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv4_udp,
+			 sizeof(test_packet_ipv4_udp));
+
+	for (i = 0; i < num_pkt; i++)
+		offset[i] = 14;
+
+	parse.proto = ODP_PROTO_IPV4;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], offset[0], &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], &offset[1],
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(odp_packet_has_udp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT_EQUAL(odp_packet_l3_type(pkt[i]),
+				ODP_PROTO_L3_TYPE_IPV4);
+		CU_ASSERT_EQUAL(odp_packet_l4_type(pkt[i]),
+				ODP_PROTO_L4_TYPE_UDP);
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/IPv4/TCP */
+static void parse_eth_ipv4_tcp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv4_tcp,
+			 sizeof(test_packet_ipv4_tcp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_udp(pkt[i]));
+		CU_ASSERT_EQUAL(odp_packet_l2_type(pkt[i]),
+				ODP_PROTO_L2_TYPE_ETH);
+		CU_ASSERT_EQUAL(odp_packet_l3_type(pkt[i]),
+				ODP_PROTO_L3_TYPE_IPV4);
+		CU_ASSERT_EQUAL(odp_packet_l4_type(pkt[i]),
+				ODP_PROTO_L4_TYPE_TCP);
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/IPv6/UDP */
+static void parse_eth_ipv6_udp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv6_udp,
+			 sizeof(test_packet_ipv6_udp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(odp_packet_has_udp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/IPv6/TCP */
+static void parse_eth_ipv6_tcp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv6_tcp,
+			 sizeof(test_packet_ipv6_tcp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_ALL;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(!odp_packet_has_udp(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/VLAN/IPv4/UDP */
+static void parse_eth_vlan_ipv4_udp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_vlan_ipv4_udp,
+			 sizeof(test_packet_vlan_ipv4_udp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_vlan(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(odp_packet_has_udp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/VLAN/IPv6/UDP */
+static void parse_eth_vlan_ipv6_udp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_vlan_ipv6_udp,
+			 sizeof(test_packet_vlan_ipv6_udp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_vlan(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(odp_packet_has_udp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT_EQUAL(odp_packet_l2_type(pkt[i]),
+				ODP_PROTO_L2_TYPE_ETH);
+		CU_ASSERT_EQUAL(odp_packet_l3_type(pkt[i]),
+				ODP_PROTO_L3_TYPE_IPV6);
+		CU_ASSERT_EQUAL(odp_packet_l4_type(pkt[i]),
+				ODP_PROTO_L4_TYPE_UDP);
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/VLAN/VLAN/IPv4/UDP */
+static void parse_eth_vlan_qinq_ipv4_udp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_vlan_qinq_ipv4_udp,
+			 sizeof(test_packet_vlan_qinq_ipv4_udp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_vlan(pkt[i]));
+		CU_ASSERT(odp_packet_has_vlan_qinq(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(odp_packet_has_udp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/ARP */
+static void parse_eth_arp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_arp,
+			 sizeof(test_packet_arp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_eth_bcast(pkt[i]));
+		CU_ASSERT(odp_packet_has_arp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_vlan(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_udp(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/IPv4/ICMP */
+static void parse_eth_ipv4_icmp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv4_icmp,
+			 sizeof(test_packet_ipv4_icmp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(odp_packet_has_icmp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_eth_bcast(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/IPv6/ICMP */
+static void parse_eth_ipv6_icmp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv6_icmp,
+			 sizeof(test_packet_ipv6_icmp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(odp_packet_has_icmp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_eth_bcast(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/IPv4/SCTP */
+static void parse_eth_ipv4_sctp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv4_sctp,
+			 sizeof(test_packet_ipv4_sctp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(odp_packet_has_sctp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_udp(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/IPv4/IPSEC AH*/
+static void parse_eth_ipv4_ipsec_ah(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv4_ipsec_ah,
+			 sizeof(test_packet_ipv4_ipsec_ah));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipsec(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_udp(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/IPv4/IPSEC ESP*/
+static void parse_eth_ipv4_ipsec_esp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv4_ipsec_esp,
+			 sizeof(test_packet_ipv4_ipsec_esp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipsec(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_udp(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/IPv6/IPSEC AH*/
+static void parse_eth_ipv6_ipsec_ah(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv6_ipsec_ah,
+			 sizeof(test_packet_ipv6_ipsec_ah));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipsec(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_udp(pkt[i]));
+		CU_ASSERT_EQUAL(odp_packet_l2_type(pkt[i]),
+				ODP_PROTO_L2_TYPE_ETH);
+		CU_ASSERT_EQUAL(odp_packet_l3_type(pkt[i]),
+				ODP_PROTO_L3_TYPE_IPV6);
+		CU_ASSERT_EQUAL(odp_packet_l4_type(pkt[i]),
+				ODP_PROTO_L4_TYPE_AH);
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/IPv6/IPSEC ESP*/
+static void parse_eth_ipv6_ipsec_esp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv6_ipsec_esp,
+			 sizeof(test_packet_ipv6_ipsec_esp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipsec(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_udp(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet mcast/IPv4 mcast/UDP */
+static void parse_mcast_eth_ipv4_udp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_mcast_eth_ipv4_udp,
+			 sizeof(test_packet_mcast_eth_ipv4_udp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_eth_mcast(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(odp_packet_has_ip_mcast(pkt[i]));
+		CU_ASSERT(odp_packet_has_udp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_eth_bcast(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ip_bcast(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet bcast/IPv4 bcast/UDP */
+static void parse_bcast_eth_ipv4_udp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_bcast_eth_ipv4_udp,
+			 sizeof(test_packet_bcast_eth_ipv4_udp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_eth_bcast(pkt[i]));
+		/* API specifies that Ethernet broadcast is also multicast */
+		CU_ASSERT(odp_packet_has_eth_mcast(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(odp_packet_has_ip_bcast(pkt[i]));
+		CU_ASSERT(odp_packet_has_udp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ip_mcast(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet mcast/IPv6 mcast/UDP */
+static void parse_mcast_eth_ipv6_udp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_mcast_eth_ipv6_udp,
+			 sizeof(test_packet_mcast_eth_ipv6_udp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_eth_mcast(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(odp_packet_has_ip_mcast(pkt[i]));
+		CU_ASSERT(odp_packet_has_udp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_eth_bcast(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ip_bcast(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/IPv4/UDP first fragment */
+static void parse_eth_ipv4_udp_first_frag(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv4_udp_first_frag,
+			 sizeof(test_packet_ipv4_udp_first_frag));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipfrag(pkt[i]));
+		CU_ASSERT(odp_packet_has_udp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipopt(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/IPv4/UDP last fragment */
+static void parse_eth_ipv4_udp_last_frag(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv4_udp_last_frag,
+			 sizeof(test_packet_ipv4_udp_last_frag));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipfrag(pkt[i]));
+		CU_ASSERT(odp_packet_has_udp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipopt(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
+/* Ethernet/IPv4 + options (Record route, NOP)/ICMP */
+static void parse_eth_ipv4_rr_nop_icmp(void)
+{
+	odp_packet_parse_param_t parse;
+	int i;
+	int num_pkt = PARSE_TEST_NUM_PKT;
+	odp_packet_t pkt[num_pkt];
+
+	parse_test_alloc(pkt, test_packet_ipv4_rr_nop_icmp,
+			 sizeof(test_packet_ipv4_rr_nop_icmp));
+
+	parse.proto = ODP_PROTO_ETH;
+	parse.last_layer = ODP_PROTO_LAYER_L4;
+	parse.chksums.all_chksum = 0;
+
+	CU_ASSERT(odp_packet_parse(pkt[0], 0, &parse) == 0);
+	CU_ASSERT(odp_packet_parse_multi(&pkt[1], parse_test.offset_zero,
+					 num_pkt - 1, &parse) == (num_pkt - 1));
+
+	for (i = 0; i < num_pkt; i++) {
+		CU_ASSERT(odp_packet_has_eth(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipv4(pkt[i]));
+		CU_ASSERT(odp_packet_has_ipopt(pkt[i]));
+		CU_ASSERT(odp_packet_has_icmp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipfrag(pkt[i]));
+		CU_ASSERT(!odp_packet_has_ipv6(pkt[i]));
+		CU_ASSERT(!odp_packet_has_udp(pkt[i]));
+		CU_ASSERT(!odp_packet_has_tcp(pkt[i]));
+	}
+
+	odp_packet_free_multi(pkt, num_pkt);
+}
+
 odp_testinfo_t packet_suite[] = {
 	ODP_TEST_INFO(packet_test_alloc_free),
 	ODP_TEST_INFO(packet_test_alloc_free_multi),
+	ODP_TEST_INFO(packet_test_free_sp),
 	ODP_TEST_INFO(packet_test_alloc_segmented),
 	ODP_TEST_INFO(packet_test_basic_metadata),
 	ODP_TEST_INFO(packet_test_debug),
@@ -2404,16 +3338,47 @@ odp_testinfo_t packet_suite[] = {
 	ODP_TEST_INFO_NULL,
 };
 
+odp_testinfo_t packet_parse_suite[] = {
+	ODP_TEST_INFO(parse_eth_ipv4_udp),
+	ODP_TEST_INFO(parse_ipv4_udp),
+	ODP_TEST_INFO(parse_eth_ipv4_tcp),
+	ODP_TEST_INFO(parse_eth_ipv6_udp),
+	ODP_TEST_INFO(parse_eth_ipv6_tcp),
+	ODP_TEST_INFO(parse_eth_vlan_ipv4_udp),
+	ODP_TEST_INFO(parse_eth_vlan_ipv6_udp),
+	ODP_TEST_INFO(parse_eth_vlan_qinq_ipv4_udp),
+	ODP_TEST_INFO(parse_eth_arp),
+	ODP_TEST_INFO(parse_eth_ipv4_icmp),
+	ODP_TEST_INFO(parse_eth_ipv6_icmp),
+	ODP_TEST_INFO(parse_eth_ipv4_sctp),
+	ODP_TEST_INFO(parse_eth_ipv4_ipsec_ah),
+	ODP_TEST_INFO(parse_eth_ipv4_ipsec_esp),
+	ODP_TEST_INFO(parse_eth_ipv6_ipsec_ah),
+	ODP_TEST_INFO(parse_eth_ipv6_ipsec_esp),
+	ODP_TEST_INFO(parse_mcast_eth_ipv4_udp),
+	ODP_TEST_INFO(parse_bcast_eth_ipv4_udp),
+	ODP_TEST_INFO(parse_mcast_eth_ipv6_udp),
+	ODP_TEST_INFO(parse_eth_ipv4_udp_first_frag),
+	ODP_TEST_INFO(parse_eth_ipv4_udp_last_frag),
+	ODP_TEST_INFO(parse_eth_ipv4_rr_nop_icmp),
+	ODP_TEST_INFO_NULL,
+};
+
 odp_suiteinfo_t packet_suites[] = {
-	{ .pName = "packet tests",
-			.pTests = packet_suite,
-			.pInitFunc = packet_suite_init,
-			.pCleanupFunc = packet_suite_term,
+	{ .name         = "packet tests",
+	  .testinfo_tbl = packet_suite,
+	  .init_func    = packet_suite_init,
+	  .term_func    = packet_suite_term,
+	},
+	{ .name         = "packet parse tests",
+	  .testinfo_tbl = packet_parse_suite,
+	  .init_func    = packet_parse_suite_init,
+	  .term_func    = packet_parse_suite_term,
 	},
 	ODP_SUITE_INFO_NULL,
 };
 
-int packet_main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
 	int ret;
 

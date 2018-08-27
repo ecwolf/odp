@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, Linaro Limited
+/* Copyright (c) 2017-2018, Linaro Limited
  * All rights reserved
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -28,6 +28,7 @@ extern "C" {
 #include <odp/helper/odph_lineartable.h>
 #include <odp/helper/odph_iplookuptable.h>
 #include <odp/helper/odph_iplookuptablev6.h>
+#include <odp/helper/sctp.h>
 #include <odp/helper/strong_types.h>
 #include <odp/helper/tcp.h>
 #include <odp/helper/table.h>

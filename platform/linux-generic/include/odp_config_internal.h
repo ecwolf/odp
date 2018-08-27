@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, Linaro Limited
+/* Copyright (c) 2016-2018, Linaro Limited
  * All rights reserved.
  *
  * SPDX-License-Identifier:     BSD-3-Clause
@@ -12,6 +12,11 @@ extern "C" {
 #endif
 
 /*
+ * Maximum number of CPUs supported. Maximum CPU ID is CONFIG_NUM_CPU - 1.
+ */
+#define CONFIG_NUM_CPU 256
+
+/*
  * Maximum number of pools
  */
 #define ODP_CONFIG_POOLS 64
@@ -20,6 +25,13 @@ extern "C" {
  * Maximum number of queues
  */
 #define ODP_CONFIG_QUEUES 1024
+
+/*
+ * Maximum queue depth. Maximum number of elements that can be stored in a
+ * queue. This value is used only when the size is not explicitly provided
+ * during queue creation.
+ */
+#define CONFIG_QUEUE_SIZE 4096
 
 /*
  * Maximum number of ordered locks per queue
@@ -122,12 +134,22 @@ extern "C" {
 #define ODP_CONFIG_SHM_BLOCKS (ODP_CONFIG_POOLS + 48)
 
 /*
+ * Size of the virtual address space pre-reserver for ISHM
+ *
+ * This is just virtual space preallocation size, not memory allocation.
+ * This address space is used by ISHM to map things at a common address in
+ * all ODP threads (when the _ODP_ISHM_SINGLE_VA flag is used).
+ * In bytes.
+ */
+#define ODP_CONFIG_ISHM_VA_PREALLOC_SZ (536870912L)
+
+/*
  * Maximum event burst size
  *
  * This controls the burst size on various enqueue, dequeue, etc calls. Large
  * burst size improves throughput, but may degrade QoS (increase latency).
  */
-#define CONFIG_BURST_SIZE 16
+#define CONFIG_BURST_SIZE 32
 
 /*
  * Maximum number of events in a pool
@@ -138,16 +160,6 @@ extern "C" {
  * Maximum number of events in a thread local pool cache
  */
 #define CONFIG_POOL_CACHE_SIZE 256
-
-/*
- * Size of the virtual address space pre-reserver for ISHM
- *
- * This is just virtual space preallocation size, not memory allocation.
- * This address space is used by ISHM to map things at a common address in
- * all ODP threads (when the _ODP_ISHM_SINGLE_VA flag is used).
- * In bytes.
- */
-#define ODP_CONFIG_ISHM_VA_PREALLOC_SZ (536870912L)
 
 #ifdef __cplusplus
 }
